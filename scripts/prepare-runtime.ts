@@ -57,6 +57,22 @@ if (process.platform === "win32") {
       files[`usr/lib/${match[1]}`] = `runtime/${match[1]}`;
     }
   }
+  for (const pkg of [
+    "libpq5",
+    "libmariadb3",
+    "libssl3",
+    "zlib1g",
+    "libzstd1",
+    "liblz4-1",
+  ]) {
+    const source = `/usr/share/doc/${pkg}/copyright`;
+    if (await Bun.file(source).exists()) {
+      const name = `${pkg}-copyright`;
+      await cp(source, join(runtime, name));
+      files[`usr/share/doc/kitsune/runtime-licenses/${name}`] =
+        `runtime/${name}`;
+    }
+  }
   await writeFile(
     join(root, "src-tauri/tauri.runtime.conf.json"),
     JSON.stringify({ bundle: { linux: { appimage: { files } } } }, null, 2),
