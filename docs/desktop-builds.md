@@ -40,6 +40,14 @@ bun run tauri build --bundles deb,appimage --ci --config src-tauri/tauri.runtime
 
 Generated `src-tauri/runtime/` and its merge configuration are ignored by Git. A source checkout is sufficient; local build outputs are never committed.
 
+## Windows test harness
+
+`bun run test:rust` runs Cargo normally on Linux/macOS. On Windows it uses `scripts/test-windows.ps1`: compile the test executables, embed `src-tauri/tests/windows-test.manifest` with the Windows SDK Manifest Tool, then execute the harnesses directly. Test filters and harness flags are supported, with an optional `--` separator; Windows Cargo build/profile selection flags are not forwarded by this helper. Windows SDK `mt.exe` is required. The helper runs unit/integration harnesses; there are currently no Rust doctests.
+
+The Windows library harness imported `TaskDialogIndirect` but had no PE resource directory. Windows consequently selected legacy Common Controls, so the process exited with `STATUS_ENTRYPOINT_NOT_FOUND` before any test ran. The production executable already receives its manifest through Tauri. This is the [Tauri test manifest issue](https://github.com/tauri-apps/tauri/issues/13419); [Microsoft documents manifest embedding with mt.exe](https://learn.microsoft.com/en-us/windows/win32/sbscs/mt-exe). Calling Cargo a second time after patching rebuilt and replaced the test image, so the helper now executes the returned Cargo artifacts directly. Production resources and icons are unaffected by the test helper.
+
+Native Windows libraries use a release-only vcpkg triplet and are cached immediately after preparation. Rust dependency caches are retained on failures too. Failed runs retain test binaries/DLLs for one day for loader diagnostics; they contain no user database fixture files.
+
 ## Identity
 
 Tauri product/window name: **Kitsune**. `mainBinaryName` gives `Kitsune.exe` on Windows and `Kitsune` on Linux. The Rust crate and Debian package retain lowercase `kitsune`. Desktop launchers use `Name=Kitsune`, `Exec=Kitsune`, `Icon=Kitsune`. The existing fox mark is derived from Kodama's icon with Kitsune coral `#E85D3F`; PNG, ICO and ICNS assets are configured, including NSIS installer and uninstaller icons.
