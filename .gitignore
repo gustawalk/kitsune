@@ -34,3 +34,7 @@ core.*
 
 # Disposable engine TLS fixtures (never production keys)
 .kitsune-engine-tests/
+
+# Generated native packaging inputs
+src-tauri/runtime/
+src-tauri/tauri.runtime.conf.json

@@ -35,15 +35,17 @@
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico"
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     },
     "linux": {
       "deb": {
-        "depends": [
-          "libpq5"
-        ]
+        "depends": ["libpq5", "libmariadb3"]
       }
-    }
-  }
+    },
+    "shortDescription": "Understand your data.",
+    "category": "DeveloperTool"
+  },
+  "mainBinaryName": "Kitsune"
 }
