@@ -15,7 +15,7 @@ The full requested 0.1 verification is **not complete**: complete graphical work
 - Bun and stable Rust. Development was tested with Bun 1.4 and Rust 1.93.1.
 - Linux: C build tools, GTK 3, and WebKitGTK 4.1 development libraries. `pkg-config --modversion gtk+-3.0 webkit2gtk-4.1` should succeed.
 - PostgreSQL connections: native PostgreSQL client library **libpq**, including its TLS dependencies. On Arch this is provided by `postgresql-libs`; on Debian by `libpq5`. The Debian bundle declares this dependency.
-- Windows/macOS: the corresponding Tauri desktop build prerequisites. PostgreSQL also requires libpq available to the platform loader; Homebrew libpq paths are supported on macOS.
+- Windows/macOS development: the corresponding Tauri desktop build prerequisites. Source builds also require libpq available to the platform loader; Homebrew libpq paths are supported on macOS. The Windows workflow bundles its native database-client DLLs.
 
 SQLite is bundled into the Rust application and needs no external database service. No credentials, account, remote fonts, or cloud service are needed to launch Kitsune.
 
@@ -180,3 +180,5 @@ Portable SQL is a deliberately bounded grammar, **not a universal SQL translator
 Main-engine verification now has dedicated commands: `bun run engines:check`, `bun run engines:up`, `bun run engines:test`, and `bun run engines:down`. These use disposable PostgreSQL/MySQL/MariaDB fixtures with TLS and source identity guards. SQL Server can be provisioned with `bun run engines:up --sqlserver` and tested with `bun run engines:test --sqlserver`. DuckDB adapter work is deferred. See [main-engine-verification.md](docs/main-engine-verification.md) for required host permissions and exact acceptance gaps.
 
 SQL Server supports encrypted username/password connections, schemas/tables/views, keys/indexes, bounded browsing, typed bound SQL, reviewed editing, investigation, watches and XML query plans. Explicit read-only/Production connections require a dedicated restricted login. `require` skips certificate validation for trusted endpoints; `verify-full` uses Rustls/native certificate trust. Cancelling SQL Server closes its connection, and server cancellation is not confirmed. DDL/routines and historical restoration are unavailable for the new adapters. CodeMirror now uses maintained native SQL dialect parsers and keyword completion.
+
+Desktop packaging and manually triggered Windows/Linux builds: [build guide](docs/desktop-builds.md). Product direction, measured Linux footprint and next priorities: [product review](docs/product-review.md).
