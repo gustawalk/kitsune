@@ -44,36 +44,60 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - uses: actions/checkout@v4
         with:
           repository: microsoft/vcpkg
           ref: 817892b0ecbc6af994dd6df999c73faf795adbf2
           path: .vcpkg
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: native-cache
         with:
           path: .vcpkg/installed
-          key: windows-vcpkg-817892b-libpq-libmariadb
+          key: windows-vcpkg-817892b-release-libpq-libmariadb
       - name: Prepare database client libraries
         shell: pwsh
         run: |
           ./.vcpkg/bootstrap-vcpkg.bat -disableMetrics
-          ./.vcpkg/vcpkg.exe install libpq:x64-windows libmariadb:x64-windows --disable-metrics
+          if ($LASTEXITCODE -ne 0) { throw 'vcpkg bootstrap failed' }
+          ./.vcpkg/vcpkg.exe install libpq:x64-windows libmariadb:x64-windows --disable-metrics --overlay-triplets=.github/vcpkg-triplets
+          if ($LASTEXITCODE -ne 0) { throw 'Database client library build failed' }
           "KITSUNE_VCPKG_INSTALLED=$pwd/.vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
           $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
           $redist = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
           if (!$redist) { throw 'Missing x64 MSVC redistributable DLL directory' }
           "KITSUNE_MSVC_REDIST=$($redist.FullName)" >> $env:GITHUB_ENV
+      - uses: actions/cache/save@v4
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: .vcpkg/installed
+          key: windows-vcpkg-817892b-release-libpq-libmariadb
       - run: bun ci
       - run: bun scripts/prepare-runtime.ts
       - name: Test Rust
         shell: pwsh
         run: |
-          $env:PATH="$env:KITSUNE_VCPKG_INSTALLED/bin;$env:PATH"
+          $env:PATH="$pwd/src-tauri/runtime;$env:PATH"
+          # The test process needs the same release CRT as the installed application.
+          # Keep it beside test executables so a stale system/PATH DLL cannot win.
+          New-Item -ItemType Directory -Force src-tauri/target/debug/deps | Out-Null
+          Copy-Item src-tauri/runtime/*.dll src-tauri/target/debug/deps/
           cargo test --manifest-path src-tauri/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
       - run: bun run tauri build --bundles nsis --ci --config src-tauri/tauri.runtime.conf.json
       - name: Install and check executable, icons and database DLLs
         shell: pwsh
         run: ./scripts/check-windows-package.ps1
+      - name: Keep loader diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kitsune-windows-loader-diagnostics
+          path: |
+            src-tauri/target/debug/deps/*.exe
+            src-tauri/runtime/*.dll
+          if-no-files-found: ignore
+          retention-days: 1
       - uses: actions/upload-artifact@v4
         with:
           name: kitsune-windows
@@ -93,6 +117,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - name: Install Tauri and database client dependencies
         run: |
           sudo apt-get update
