@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 const source = readFileSync(
   new URL("../src-tauri/src/model.rs", import.meta.url),
   "utf8",
-);
+).replace(/\r\n?/g, "\n");
 function splitFields(value: string) {
   const fields: string[] = [];
   let depth = 0,
@@ -73,7 +73,7 @@ for (const match of source.matchAll(/pub struct (\w+)\s*\{([^}]+)\}/g)) {
 }
 const target = new URL("../src/lib/generated.ts", import.meta.url);
 if (process.argv.includes("--check")) {
-  if (readFileSync(target, "utf8") !== output)
+  if (readFileSync(target, "utf8").replace(/\r\n?/g, "\n") !== output)
     throw new Error(
       "Rust/TypeScript contracts differ. Run bun run types:generate.",
     );
