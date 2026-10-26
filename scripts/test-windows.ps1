@@ -3,12 +3,13 @@
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location $root
-$testArgs = @($args)
+# Accept Rust test-harness filters/flags, with an optional Cargo-style -- separator.
+$harnessArgs = @($args | Where-Object { $_ -ne '--' })
 $tool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/mt.exe" |
   Sort-Object FullName -Descending | Select-Object -First 1
 if (!$tool) { throw 'Install the Windows SDK Manifest Tool (mt.exe) to run desktop tests.' }
 $manifest = Join-Path $root 'src-tauri/tests/windows-test.manifest'
-$lines = & cargo test --manifest-path src-tauri/Cargo.toml --locked --no-run --message-format=json @testArgs
+$lines = & cargo test --manifest-path src-tauri/Cargo.toml --locked --no-run --message-format=json
 if ($LASTEXITCODE -ne 0) { throw 'Rust test compilation failed' }
 $executables = @($lines | ForEach-Object {
   $artifact = $_ | ConvertFrom-Json
@@ -24,6 +25,9 @@ foreach ($executable in $executables) {
   }
   & $tool.FullName -nologo -manifest $manifest "-outputresource:$executable;#1"
   if ($LASTEXITCODE -ne 0) { throw "Cannot embed test manifest: $executable" }
+  # Do not invoke Cargo again: its freshness check can replace the patched image.
+  Write-Host "Running $executable with Common Controls v6"
+  & $executable @harnessArgs
+  if ($LASTEXITCODE -ne 0) { throw "Rust tests failed: $executable (exit $LASTEXITCODE)" }
 }
-& cargo test --manifest-path src-tauri/Cargo.toml --locked @testArgs
-exit $LASTEXITCODE
+exit 0
