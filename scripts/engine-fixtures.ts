@@ -229,11 +229,8 @@ try {
     ]) {
       const result = Bun.spawnSync(
         [
-          "cargo",
-          "test",
-          "--manifest-path",
-          "src-tauri/Cargo.toml",
-          "--locked",
+          process.execPath,
+          "scripts/test-rust.ts",
           name,
           "--",
           "--exact",

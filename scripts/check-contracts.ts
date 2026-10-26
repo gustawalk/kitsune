@@ -7,11 +7,8 @@ try {
   const file = join(directory, "responses.json");
   const result = Bun.spawnSync(
     [
-      "cargo",
-      "test",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--locked",
+      process.execPath,
+      "scripts/test-rust.ts",
       "emit_contract_fixture",
       "--",
       "--ignored",
