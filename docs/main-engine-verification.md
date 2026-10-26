@@ -37,7 +37,7 @@ The earlier managed sandbox restrictions were removed by the user. Network, sock
 
 ## Remaining acceptance
 
-Verify native desktop keyboard/modal/clipboard flows, Windows/macOS installers and native client loading, trusted production certificate chains, SQL Server diagnostics across more server versions, custom/nested types and detailed performance measurements. MySQL strict certificate verification remains unavailable rather than silently bypassed. The current adapters are bounded implementations, not universal vendor feature coverage.
+Windows x64 NSIS build, silent installation, Kitsune naming/coral icons, installed native driver loading and application startup now pass; see desktop-builds.md and validation.md. Broader desktop keyboard/modal/clipboard flows, Windows live-server engine coverage, macOS installers/native client loading, trusted production certificate chains, additional SQL Server versions, custom/nested types and repeatable performance measurements still need acceptance. MySQL strict certificate verification remains unavailable rather than silently bypassed. The current adapters are bounded implementations, not universal vendor feature coverage.
 
 ## Native Linux smoke
 
