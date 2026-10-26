@@ -139,6 +139,7 @@ function App() {
     update({
       connections: data.connections,
       activeConnections: data.active,
+      readOnly: data.readOnly,
       settings,
       watches: data.watches,
       tabs: restoredTabs,

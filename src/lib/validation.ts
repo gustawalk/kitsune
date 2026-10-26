@@ -309,6 +309,7 @@ const schemas: Record<string, z.ZodType> = {
   bootstrap: z.object({
     connections: z.array(connection),
     active: z.array(z.string()),
+    readOnly: z.record(z.boolean()),
     watches: z.array(watch),
     investigations: z.array(investigation),
     settings: settings.nullable(),

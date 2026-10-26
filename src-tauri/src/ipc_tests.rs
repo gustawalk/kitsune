@@ -2094,3 +2094,40 @@ async fn sqlserver_network_workflow_fixture() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(internal);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bootstrap_preserves_current_session_write_mode() {
+    let (app, path, internal) = app();
+    rusqlite::Connection::open(&path).unwrap();
+    connect(&app, &path, false);
+    assert_eq!(
+        call(&app, "bootstrap", json!({})).unwrap()["readOnly"]["test"],
+        false
+    );
+    call(
+        &app,
+        "set_write_access",
+        json!({"id":"test","enabled":false}),
+    )
+    .unwrap();
+    let bootstrap = call(&app, "bootstrap", json!({})).unwrap();
+    assert_eq!(bootstrap["readOnly"]["test"], true);
+    assert_eq!(bootstrap["connections"][0]["readOnly"], false);
+    call(
+        &app,
+        "set_write_access",
+        json!({"id":"test","enabled":true,"confirmed":true}),
+    )
+    .unwrap();
+    assert_eq!(
+        call(&app, "bootstrap", json!({})).unwrap()["readOnly"]["test"],
+        false
+    );
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    let bootstrap = call(&app, "bootstrap", json!({})).unwrap();
+    assert_eq!(bootstrap["readOnly"], json!({}));
+    assert_eq!(bootstrap["active"], json!([]));
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}

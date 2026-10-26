@@ -58,15 +58,17 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         "choose_sqlite_file" => crate::file_picker::choose(&app, &p),
         "bootstrap" => {
             let configs = state.storage.list::<ConnectionConfig>("connections")?;
-            let active: Vec<String> = state
-                .sessions
-                .lock()
-                .map_err(|_| locked())?
-                .keys()
-                .cloned()
-                .collect();
+            let (active, read_only) = {
+                let sessions = state.sessions.lock().map_err(|_| locked())?;
+                let active: Vec<String> = sessions.keys().cloned().collect();
+                let read_only: HashMap<String, bool> = sessions
+                    .iter()
+                    .map(|(id, session)| (id.clone(), session.read_only.load(Ordering::SeqCst)))
+                    .collect();
+                (active, read_only)
+            };
             Ok(
-                json!({"connections":configs,"active":active,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"session"}),
+                json!({"connections":configs,"active":active,"readOnly":read_only,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"session"}),
             )
         }
         "save_connection" => {

@@ -81,6 +81,7 @@ export interface Tab {
 export interface Bootstrap {
   connections: Connection[];
   active: string[];
+  readOnly: Record<string, boolean>;
   watches: Watch[];
   investigations: Investigation[];
   settings: Settings | null;
