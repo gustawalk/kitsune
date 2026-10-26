@@ -4,7 +4,7 @@ Kitsune still follows its original purpose: a local database investigation envir
 
 ## Lightweight
 
-The release uses the system WebKit runtime rather than shipping Chromium. Workspace bundles are lazy-loaded, data grids render visible rows, table browsing defaults to 100 rows and the request cache has a 24 MiB budget. The measured Linux release executable is about 12 MB and its Debian archive about 5.3 MB, excluding installed system dependencies. AppImage and Windows distributions include additional runtime dependencies and will be larger.
+The release uses the system WebKit runtime rather than shipping Chromium. Workspace bundles are lazy-loaded, data grids render visible rows, table browsing defaults to 100 rows and the request cache has a 24 MiB budget. The measured Linux release executable is about 12 MB and its Debian archive about 5.5 MB on this host (5.3 MB from the Ubuntu CI build), excluding installed system dependencies. AppImage and Windows distributions include additional runtime dependencies and will be larger.
 
 A fresh-profile native release measurement on the current Linux desktop took 0.887 seconds from WebDriver session creation to a rendered sidebar. After five seconds idle, the application plus its two WebKit child processes used 573.47 MiB summed RSS and 320.90 MiB summed proportional set size (PSS). RSS double-counts shared pages. Over the following five seconds these processes consumed 0.0% of one CPU core at the sampling resolution. The driver processes were excluded from memory/CPU totals. This is one automation-assisted run, not a benchmark distribution, and includes no connections or open data tabs. Hardware, WebKit version, graphics and warm caches affect the result.
 

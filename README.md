@@ -57,6 +57,10 @@ bun run tauri build --bundles deb
 
 Native outputs are under `src-tauri/target/release/`. Building a Linux package does not verify Windows or macOS. AppImage packaging may need additional platform tooling or downloads.
 
+The [desktop workflow](docs/desktop-builds.md) produces versioned Kitsune setup downloads. Manual runs keep Windows/Linux artifacts for seven days; they do not publish a release. Run the Windows `Kitsune_*_x64-setup.exe` installer to install the application and its database-client DLLs. On Debian/Ubuntu, install the `.deb` with `sudo apt install ./Kitsune_0.1.0_amd64.deb`. Make an AppImage executable with `chmod +x Kitsune_0.1.0_amd64.AppImage`; `APPIMAGE_EXTRACT_AND_RUN=1 ./Kitsune_0.1.0_amd64.AppImage` works without FUSE. The current AppImage launcher uses X11/XWayland. Windows downloads are currently unsigned.
+
+On Windows, `bun run test:rust` automatically prepares the Common Controls manifest required by Tauri's native test harness. Use this command rather than bare `cargo test`; see the build guide for the Windows SDK requirement.
+
 ## Schema viewer
 
 Open **Schema viewer** from the sidebar, a connection's menu, **View schema** on a table, or the command palette. The catalog shows real columns, defaults, nullability, keys, indexes, and incoming/outgoing foreign keys. SQLite also exposes its reported source SQL.
@@ -67,7 +71,7 @@ All dropdowns now share a themed Radix/shadcn select rather than the browser's n
 
 ## Explore → observe → investigate
 
-1. Add PostgreSQL, SQLite, or MySQL/MariaDB preview connection settings. SQLite creation is an explicit checkbox/action; testing a connection cannot create a file.
+1. Add PostgreSQL, SQLite, SQL Server, or MySQL/MariaDB preview connection settings. SQLite creation is an explicit checkbox/action; testing a connection cannot create a file.
 2. Connect, search the explorer, and open table data or structure. Use the SQL editor for explicit statements or sequential scripts.
 3. Select a row with a complete primary or eligible non-null unique key. Open **Investigate** to expand declared incoming/outgoing foreign keys, including composite relationships.
 4. Create a record, scoped-table, or query watch. The first successful observation establishes a baseline.
