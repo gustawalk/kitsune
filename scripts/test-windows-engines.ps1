@@ -18,7 +18,7 @@ foreach ($server in $servers) {
   $process = $null
   try {
     $archive = Join-Path $work 'server.zip'
-    Invoke-WebRequest $server.Url -OutFile $archive
+    Invoke-WebRequest $server.Url -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 5
     if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $server.Hash) { throw 'Server archive checksum mismatch' }
     & tar -xf $archive -C $work
     if ($LASTEXITCODE -ne 0) { throw 'Server archive extraction failed' }
@@ -32,7 +32,8 @@ foreach ($server in $servers) {
     }
     if ($LASTEXITCODE -ne 0) { throw 'Disposable data directory initialization failed' }
     $init = Join-Path $work 'initialize.sql'
-    $sql = "CREATE DATABASE kitsune_test;`nCREATE USER 'kitsune_test'@'127.0.0.1' IDENTIFIED BY 'kitsune_test';`nCREATE USER 'kitsune_test'@'localhost' IDENTIFIED BY 'kitsune_test';`nGRANT ALL ON kitsune_test.* TO 'kitsune_test'@'127.0.0.1';`nGRANT ALL ON kitsune_test.* TO 'kitsune_test'@'localhost';`nUSE kitsune_test;`n" + [IO.File]::ReadAllText((Join-Path $root 'tests/fixtures/mysql.sql'))
+    $fixtureSql = [IO.File]::ReadAllLines((Join-Path $root 'tests/fixtures/mysql.sql')) | Where-Object { $_.Trim() -and !$_.TrimStart().StartsWith('--') }
+    $sql = "CREATE DATABASE kitsune_test;`nCREATE USER 'kitsune_test'@'127.0.0.1' IDENTIFIED BY 'kitsune_test';`nCREATE USER 'kitsune_test'@'localhost' IDENTIFIED BY 'kitsune_test';`nGRANT ALL ON kitsune_test.* TO 'kitsune_test'@'127.0.0.1';`nGRANT ALL ON kitsune_test.* TO 'kitsune_test'@'localhost';`nUSE kitsune_test;`n" + ($fixtureSql -join "`n")
     [IO.File]::WriteAllText($init, $sql, [Text.UTF8Encoding]::new($false))
     $ini = Join-Path $work 'server.ini'
     $tls = (Join-Path $fixture 'tls').Replace('\','/')
