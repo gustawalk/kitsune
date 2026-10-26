@@ -40,14 +40,14 @@ $app=Join-Path $destination 'Kitsune.exe'
 if (!(Test-Path $app)) { throw 'Installed Kitsune.exe missing' }
 if ((Get-Item $app).VersionInfo.ProductName -ne 'Kitsune') { throw 'Incorrect executable product name' }
 Assert-KitsuneIcon $app
-foreach ($entry in @(@('libpq.dll','PQlibVersion'),@('libmariadb.dll','mysql_get_client_info'))) {
-  $path=Join-Path $destination $entry[0]
+foreach ($entry in @(@{ File='libpq.dll'; Symbol='PQlibVersion' })) {
+  $path=Join-Path $destination $entry.File
   if (!(Test-Path $path)) { throw "Missing packaged driver: $path" }
   # Resolve dependent DLLs from this installed directory and safe system directories.
   $handle=[KitsuneNativeCheck]::LoadLibraryEx($path,[IntPtr]::Zero,0x1100)
   if ($handle -eq [IntPtr]::Zero) { throw "Cannot load installed driver: $path (Win32 $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
   try {
-    if ([KitsuneNativeCheck]::GetProcAddress($handle,$entry[1]) -eq [IntPtr]::Zero) { throw "Driver API missing: $($entry[1])" }
+    if ([KitsuneNativeCheck]::GetProcAddress($handle,$entry.Symbol) -eq [IntPtr]::Zero) { throw "Driver API missing: $($entry.Symbol)" }
   } finally { [void][KitsuneNativeCheck]::FreeLibrary($handle) }
 }
 $launched=Start-Process -FilePath $app -PassThru

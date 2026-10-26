@@ -1,8 +1,9 @@
 /** Stage native drivers explicitly: dlopen dependencies are invisible to bundlers. */
-import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 const root = resolve(import.meta.dir, "..");
 const runtime = join(root, "src-tauri/runtime");
+await rm(runtime, { recursive: true, force: true });
 await mkdir(runtime, { recursive: true });
 if (process.platform === "win32") {
   const installed = process.env.KITSUNE_VCPKG_INSTALLED;
@@ -14,8 +15,7 @@ if (process.platform === "win32") {
     if (file.endsWith(".dll"))
       await cp(join(installed, "bin", file), join(runtime, file));
   }
-  for (const name of ["libpq.dll", "libmariadb.dll"])
-    await readFile(join(runtime, name));
+  for (const name of ["libpq.dll"]) await readFile(join(runtime, name));
   const redist = process.env.KITSUNE_MSVC_REDIST;
   if (!redist)
     throw Error(
@@ -38,7 +38,7 @@ if (process.platform === "win32") {
   );
 } else if (process.platform === "linux") {
   const files: Record<string, string> = {};
-  for (const library of ["libpq.so.5", "libmariadb.so.3"]) {
+  for (const library of ["libpq.so.5"]) {
     const result = Bun.spawnSync(["ldconfig", "-p"]);
     if (result.exitCode) throw Error("ldconfig failed");
     const source = result.stdout
@@ -52,7 +52,7 @@ if (process.platform === "win32") {
     files[`usr/lib/${library}`] = `runtime/${library}`;
   }
   // Include transitive dependencies too, since the libraries are dynamically loaded.
-  for (const library of ["libpq.so.5", "libmariadb.so.3"]) {
+  for (const library of ["libpq.so.5"]) {
     const result = Bun.spawnSync(["ldd", join(runtime, library)]);
     if (result.exitCode) throw Error("ldd failed");
     for (const line of result.stdout.toString().split("\n")) {
@@ -66,14 +66,7 @@ if (process.platform === "win32") {
       files[`usr/lib/${match[1]}`] = `runtime/${match[1]}`;
     }
   }
-  for (const pkg of [
-    "libpq5",
-    "libmariadb3",
-    "libssl3",
-    "zlib1g",
-    "libzstd1",
-    "liblz4-1",
-  ]) {
+  for (const pkg of ["libpq5", "libssl3", "zlib1g", "libzstd1", "liblz4-1"]) {
     const source = `/usr/share/doc/${pkg}/copyright`;
     if (await Bun.file(source).exists()) {
       const name = `${pkg}-copyright`;

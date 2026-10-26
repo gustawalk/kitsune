@@ -41,7 +41,7 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libpq5", "libmariadb3"]
+        "depends": ["libpq5"]
       }
     },
     "shortDescription": "Understand your data.",
