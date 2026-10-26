@@ -3384,7 +3384,7 @@ td svg {
   min-width: 165px;
   max-width: 285px;
   border: 1px solid var(--border);
-  border-bottom: 2px solid transparent;
+  border-bottom: 0;
   border-radius: 6px 6px 0 0;
   background: var(--surface);
   overflow: hidden;
@@ -3404,7 +3404,16 @@ td svg {
 }
 .workspace-tab.active {
   background: var(--surface-raised);
-  border-bottom-color: var(--tab-tone);
+  border-bottom-color: transparent;
+}
+.workspace-tab.active::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: var(--tab-tone);
+  pointer-events: none;
+  z-index: 2;
 }
 /* Keep keyboard focus on the complete tab, away from the close-button seam. */
 .workspace-tab:has(> [role="tab"]:focus-visible) {
