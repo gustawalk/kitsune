@@ -39,3 +39,15 @@ core.*
 src-tauri/runtime/
 src-tauri/tauri.runtime.conf.json
 .vcpkg/
+
+# Local credentials and database files/journals
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
