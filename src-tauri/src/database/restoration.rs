@@ -107,10 +107,18 @@ impl Database {
         let mut metadata = self.metadata(table)?;
         metadata.indexes.sort_by(|a, b| a.name.cmp(&b.name));
         metadata.foreign_keys.sort_by(|a, b| a.name.cmp(&b.name));
-        let definition = self.table_definition(table)?;
+        let definition = self.table_definition(table)?.map(|sql| {
+            if self.is_mysql() {
+                stable_mysql_definition(&sql)
+            } else {
+                sql
+            }
+        });
         let mut generated = self.restore_generated(table)?;
         generated.0.sort();
-        let constraints = if self.is_postgres() {
+        let constraints = if self.is_mysql() {
+            Some(self.query("SELECT CONSTRAINT_NAME,REFERENCED_TABLE_NAME,UPDATE_RULE,DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=?1 AND (TABLE_NAME=?2 OR REFERENCED_TABLE_NAME=?2) ORDER BY CONSTRAINT_NAME",&[Value::Text(table.schema.clone()),Value::Text(table.name.clone())],10000,true,5)?.rows)
+        } else if self.is_postgres() {
             Some(self.query("SELECT f.conname,pg_catalog.pg_get_constraintdef(f.oid) FROM pg_catalog.pg_constraint f JOIN pg_catalog.pg_class c ON c.oid=f.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY f.conname",&[Value::Text(table.schema.clone()),Value::Text(table.name.clone())],10000,true,5)?.rows)
         } else {
             None
@@ -128,6 +136,19 @@ impl Database {
         Ok(signature)
     }
     pub fn restore_lock(&mut self, table: &TableRef) -> Result<(), Error> {
+        if self.is_mysql() {
+            self.query(
+                &format!(
+                    "SELECT 1 FROM {} LIMIT 1 FOR UPDATE",
+                    super::qualified(table)
+                ),
+                &[],
+                1,
+                false,
+                5,
+            )?;
+            self.restore_cache.remove(table);
+        }
         if self.is_postgres() {
             self.query(
                 &format!(
@@ -143,10 +164,31 @@ impl Database {
         Ok(())
     }
     pub fn restore_protection(&mut self, table: &TableRef) -> Result<(), Error> {
-        if self.is_mysql() || self.is_mssql() {
+        if self.is_mysql() {
+            self.require_transactional_table(table)?;
+            let p = [
+                Value::Text(table.schema.clone()),
+                Value::Text(table.name.clone()),
+            ];
+            let r=self.query("SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE UNIQUE_CONSTRAINT_SCHEMA=?1 AND REFERENCED_TABLE_NAME=?2 AND (DELETE_RULE IN ('CASCADE','SET NULL') OR UPDATE_RULE IN ('CASCADE','SET NULL'))",&p,1,true,5)?;
+            if r.rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(Value::text)
+                .as_deref()
+                != Some("0")
+            {
+                return Err(Error::new(
+                    "RESTORE_CASCADE",
+                    "Historical restore is blocked for cascading or SET NULL relationships. Use reviewed SQL.",
+                ));
+            }
+            return Ok(());
+        }
+        if self.is_mssql() {
             return Err(Error::new(
                 "RESTORE_UNSUPPORTED",
-                "Reviewed historical restoration is not yet supported for MySQL/MariaDB or SQL Server. Inspect history and use reviewed SQL instead.",
+                "Reviewed historical restoration is not yet supported for SQL Server. Inspect history and use reviewed SQL instead.",
             ));
         }
         let (trigger, cascade) = if self.is_postgres() {
@@ -190,5 +232,68 @@ impl Database {
             ));
         }
         Ok(())
+    }
+}
+
+// SHOW CREATE includes the next sequence value, which changes with data rather than schema.
+fn stable_mysql_definition(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if matches!(bytes[i], b'\'' | b'"' | b'`') {
+            let quote = bytes[i];
+            output.push(bytes[i]);
+            i += 1;
+            while i < bytes.len() {
+                let ch = bytes[i];
+                output.push(ch);
+                i += 1;
+                if ch == quote {
+                    if bytes.get(i) == Some(&quote) {
+                        output.push(quote);
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        } else if (i == 0 || bytes[i - 1].is_ascii_whitespace())
+            && bytes[i..].starts_with(b"AUTO_INCREMENT=")
+        {
+            let mut end = i + 15;
+            while bytes.get(end).is_some_and(u8::is_ascii_digit) {
+                end += 1;
+            }
+            if end > i + 15 && bytes.get(end).is_none_or(u8::is_ascii_whitespace) {
+                while bytes.get(end).is_some_and(u8::is_ascii_whitespace) {
+                    end += 1;
+                }
+                i = end;
+            } else {
+                output.push(bytes[i]);
+                i += 1;
+            }
+        } else {
+            output.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(output).expect("only ASCII sequence metadata was removed")
+}
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::stable_mysql_definition;
+    #[test]
+    fn ignores_sequence_counter_but_preserves_literals_and_schema() {
+        let a = "CREATE TABLE `AUTO_INCREMENT=5` (id INT AUTO_INCREMENT, note TEXT DEFAULT 'AUTO_INCREMENT=3') ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4";
+        let b = a.replace("InnoDB AUTO_INCREMENT=3", "InnoDB AUTO_INCREMENT=900");
+        assert_eq!(stable_mysql_definition(a), stable_mysql_definition(&b));
+        assert!(stable_mysql_definition(a).contains("DEFAULT 'AUTO_INCREMENT=3'"));
+        assert!(stable_mysql_definition(a).contains("`AUTO_INCREMENT=5`"));
+        assert_ne!(
+            stable_mysql_definition(a),
+            stable_mysql_definition(&a.replace("id INT", "id BIGINT"))
+        );
     }
 }

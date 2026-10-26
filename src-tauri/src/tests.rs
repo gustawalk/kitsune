@@ -13,6 +13,9 @@ fn config(path: String) -> ConnectionConfig {
         username: String::new(),
         password: "do-not-persist".into(),
         ssl_mode: "prefer".into(),
+        tls_ca_path: String::new(),
+        tls_cert_path: String::new(),
+        tls_key_path: String::new(),
         read_only: false,
         create: true,
     }

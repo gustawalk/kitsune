@@ -79,6 +79,7 @@ export interface Tab {
   watchId?: string;
 }
 export interface Bootstrap {
+  transactions: Record<string, "idle" | "active" | "lost">;
   connections: Connection[];
   active: string[];
   readOnly: Record<string, boolean>;
@@ -97,6 +98,8 @@ export interface ApiError {
   message: string;
 }
 export interface Execution {
+  schemaChanged?: boolean;
+  transactionState?: "idle" | "active" | "lost";
   warning?: string | null;
   results: ResultSet[];
   error: ApiError | null;
@@ -129,6 +132,9 @@ export const emptyConnection = (): Connection => ({
   database: "",
   username: "",
   sslMode: "prefer",
+  tlsCaPath: "",
+  tlsCertPath: "",
+  tlsKeyPath: "",
   path: "",
   readOnly: false,
   create: false,

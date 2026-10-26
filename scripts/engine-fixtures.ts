@@ -16,11 +16,11 @@ const compose = [
 const operation = process.argv[2] || "check";
 const extra = process.argv.slice(3);
 if (
-  !["check", "up", "test", "down"].includes(operation) ||
+  !["check", "up", "test", "down", "certificates"].includes(operation) ||
   extra.some((a) => a !== "--sqlserver")
 ) {
   console.error(
-    "Usage: bun scripts/engine-fixtures.ts check|up|test|down [--sqlserver]",
+    "Usage: bun scripts/engine-fixtures.ts check|up|test|down|certificates [--sqlserver]",
   );
   process.exit(2);
 }
@@ -101,12 +101,13 @@ async function check(requireRegistry = true) {
     .filter(([name]) => requireRegistry || name !== "Package registry DNS")
     .every(([, pass]) => pass);
 }
-function certificates() {
+async function certificates() {
   const directory = join(root, ".kitsune-engine-tests", "tls");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const key = join(directory, "server-key.pem"),
     cert = join(directory, "server.pem");
   if (
+    !existsSync(join(directory, "ca.pem")) ||
     !existsSync(key) ||
     !existsSync(cert) ||
     !available(["openssl", "x509", "-checkend", "3600", "-noout", "-in", cert])
@@ -121,13 +122,49 @@ function certificates() {
       "-days",
       "2",
       "-keyout",
+      join(directory, "ca-key.pem"),
+      "-out",
+      join(directory, "ca.pem"),
+      "-subj",
+      "/CN=Kitsune disposable test CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+    ]);
+    run([
+      "openssl",
+      "req",
+      "-new",
+      "-newkey",
+      "rsa:2048",
+      "-noenc",
+      "-keyout",
       key,
       "-out",
-      cert,
+      join(directory, "server.csr"),
       "-subj",
-      "/CN=localhost",
-      "-addext",
-      "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      "/CN=127.0.0.1",
+    ]);
+    await Bun.write(
+      join(directory, "server.ext"),
+      "basicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
+    );
+    run([
+      "openssl",
+      "x509",
+      "-req",
+      "-in",
+      join(directory, "server.csr"),
+      "-CA",
+      join(directory, "ca.pem"),
+      "-CAkey",
+      join(directory, "ca-key.pem"),
+      "-CAcreateserial",
+      "-days",
+      "2",
+      "-extfile",
+      join(directory, "server.ext"),
+      "-out",
+      cert,
     ]);
   }
   // Bind individual files so container service accounts can read them; host parent stays private.
@@ -137,6 +174,7 @@ function certificates() {
   chmodSync(cert, 0o644);
 }
 try {
+  if (operation === "certificates") await certificates();
   if (operation === "check") {
     if (!(await check())) process.exitCode = 1;
   }
@@ -145,12 +183,13 @@ try {
       throw new Error(
         "Host prerequisites are blocked. Fix the reported permissions before starting fixtures.",
       );
-    certificates();
+    await certificates();
     run([
       ...compose,
       ...(sqlserver ? ["--profile", "sqlserver"] : []),
       "up",
       "-d",
+      "--force-recreate",
       "--wait",
       "--wait-timeout",
       "240",

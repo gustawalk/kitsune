@@ -80,6 +80,25 @@ fn validate_selection(path: Option<PathBuf>, create: bool) -> Result<Option<Stri
     })?;
     Ok(Some(text))
 }
+pub fn choose_tls<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Result<Value, Error> {
+    let mut picker = app.dialog().file().add_filter(
+        "PEM certificates and keys",
+        &["pem", "crt", "cer", "key", "der"],
+    );
+    if let Some(window) = app.get_webview_window("main") {
+        picker = picker.set_parent(&window);
+    }
+    let path = picker
+        .set_title("Select a TLS certificate or key")
+        .blocking_pick_file()
+        .map(|f| {
+            f.into_path()
+                .map_err(|_| Error::new("TLS_FILE", "Choose a local certificate or key file."))
+        })
+        .transpose()?;
+    Ok(json!(validate_selection(path, false)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

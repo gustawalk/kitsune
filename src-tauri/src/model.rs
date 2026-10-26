@@ -57,6 +57,12 @@ pub struct ConnectionConfig {
     #[serde(default = "tls")]
     pub ssl_mode: String,
     #[serde(default)]
+    pub tls_ca_path: String,
+    #[serde(default)]
+    pub tls_cert_path: String,
+    #[serde(default)]
+    pub tls_key_path: String,
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub read_only: bool,

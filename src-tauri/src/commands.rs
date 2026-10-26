@@ -56,19 +56,38 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             crate::restore::handle(&app, method, p)
         }
         "choose_sqlite_file" => crate::file_picker::choose(&app, &p),
+        "choose_tls_file" => crate::file_picker::choose_tls(&app),
         "bootstrap" => {
             let configs = state.storage.list::<ConnectionConfig>("connections")?;
-            let (active, read_only) = {
+            let (active, read_only, transactions) = {
                 let sessions = state.sessions.lock().map_err(|_| locked())?;
                 let active: Vec<String> = sessions.keys().cloned().collect();
                 let read_only: HashMap<String, bool> = sessions
                     .iter()
                     .map(|(id, session)| (id.clone(), session.read_only.load(Ordering::SeqCst)))
                     .collect();
-                (active, read_only)
+                let mut transactions = HashMap::<String, String>::new();
+                for session in sessions.values() {
+                    if let Ok(editors) = session.editors.lock() {
+                        for (id, e) in editors.iter() {
+                            transactions.insert(
+                                id.clone(),
+                                if e.lost.load(Ordering::SeqCst) {
+                                    "lost"
+                                } else if e.transaction.load(Ordering::SeqCst) {
+                                    "active"
+                                } else {
+                                    "idle"
+                                }
+                                .into(),
+                            );
+                        }
+                    }
+                }
+                (active, read_only, transactions)
             };
             Ok(
-                json!({"connections":configs,"active":active,"readOnly":read_only,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"session"}),
+                json!({"connections":configs,"active":active,"readOnly":read_only,"transactions":transactions,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"session"}),
             )
         }
         "save_connection" => {
@@ -120,7 +139,9 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             state.sessions.lock().map_err(|_| locked())?.insert(
                 id.clone(),
                 Arc::new(Session {
+                    access: std::sync::RwLock::new(()),
                     generation: uuid::Uuid::new_v4().to_string(),
+                    editors: Mutex::new(HashMap::new()),
                     main_interrupt: Mutex::new(db.interrupt()),
                     monitor_permit: Arc::new(tokio::sync::Semaphore::new(1)),
                     config,
@@ -131,7 +152,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 }),
             );
             Ok(
-                json!({"id":id,"readOnly":readonly,"capabilities":{"supportsSchemas":saved.driver!="sqlite","supportsForeignKeys":true,"supportsQueryCancellation":true,"supportsExplain":true,"supportsTransactionalDdl":saved.driver!="mysql","supportsReturning":saved.driver!="mysql"&&saved.driver!="mssql","supportsHistoricalRestore":saved.driver!="mysql"&&saved.driver!="mssql","supportsNotifications":false}}),
+                json!({"id":id,"readOnly":readonly,"capabilities":{"supportsSchemas":saved.driver!="sqlite","supportsForeignKeys":true,"supportsQueryCancellation":true,"supportsExplain":true,"supportsTransactionalDdl":saved.driver!="mysql","supportsReturning":saved.driver!="mysql"&&saved.driver!="mssql","supportsHistoricalRestore":saved.driver!="mssql","supportsNotifications":false}}),
             )
         }
         "disconnect" => {
@@ -140,6 +161,22 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "set_write_access" => {
             let session = state.session(field(&p, "id")?)?;
+            let _access = session.access.write().map_err(|_| locked())?;
+            if let Ok(mut editors) = session.editors.lock() {
+                if editors
+                    .values()
+                    .any(|e| e.transaction.load(Ordering::SeqCst))
+                {
+                    return Err(Error::new(
+                        "TRANSACTION_ACTIVE",
+                        "Commit or roll back SQL-tab transactions before changing connection access.",
+                    ));
+                }
+                for editor in editors.values() {
+                    editor.closed.store(true, Ordering::SeqCst);
+                }
+                editors.clear();
+            }
             let enabled = p["enabled"].as_bool().unwrap_or(false);
             if enabled && !p["confirmed"].as_bool().unwrap_or(false) {
                 return Err(Error::new(
@@ -342,9 +379,76 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             let mut db = session.db.lock().map_err(|_| locked())?;
             encode(db.browse(&request)?)
         }
+        "mysql_statement" => {
+            let sql = field(&p, "sql")?;
+            let cursor = p["cursor"].as_u64().unwrap_or(0) as usize;
+            let mut units = 0;
+            let mut byte = sql.len();
+            for (index, c) in sql.char_indices() {
+                if units >= cursor {
+                    byte = index;
+                    break;
+                }
+                units += c.len_utf16();
+            }
+            let parts = crate::mysql_sql::statements(sql)?;
+            let mut start = 0;
+            let mut chosen = None;
+            for part in parts {
+                if let Some(offset) = sql[start..].find(&part) {
+                    let end = start + offset + part.len();
+                    if byte <= end {
+                        chosen = Some(part);
+                        break;
+                    }
+                    start = end;
+                }
+            }
+            let selected = chosen.unwrap_or_default();
+            let mut delimiter = "__KITSUNE_END__".to_string();
+            while selected.contains(&delimiter) {
+                delimiter = uuid::Uuid::new_v4().simple().to_string()[..16].into();
+            }
+            Ok(
+                json!({"sql":if selected.is_empty(){String::new()}else{format!("DELIMITER {delimiter}\n{selected}{delimiter}")}}),
+            )
+        }
+        "close_editor_session" => {
+            let session = state.session(field(&p, "connectionId")?)?;
+            let id = field(&p, "tabId")?;
+            let mut editors = session.editors.lock().map_err(|_| locked())?;
+            let closing = editors.get(id).cloned();
+            let _idle = closing.as_ref().map(|editor| editor.db.try_lock().map_err(|_| Error::new("EDITOR_BUSY", "Wait for this SQL operation to finish or cancel it before closing the tab."))).transpose()?;
+            if editors
+                .get(id)
+                .is_some_and(|e| e.transaction.load(Ordering::SeqCst))
+                && !p["confirmed"].as_bool().unwrap_or(false)
+            {
+                return Err(Error::new(
+                    "CONFIRM_REQUIRED",
+                    "Closing this SQL tab ends its connection and discards uncommitted work.",
+                ));
+            }
+            if let Some(editor) = editors.remove(id) {
+                editor.closed.store(true, Ordering::SeqCst);
+                if let Some(ref handle) = editor.interrupt {
+                    handle.cancel();
+                }
+            }
+            Ok(Json::Null)
+        }
+        "editor_status" => {
+            let session = state.session(field(&p, "connectionId")?)?;
+            let editors = session.editors.lock().map_err(|_| locked())?;
+            let editor = editors.get(field(&p, "tabId")?);
+            Ok(
+                json!({"transactionState":editor.map(|e|if e.lost.load(Ordering::SeqCst){"lost"}else if e.transaction.load(Ordering::SeqCst){"active"}else{"idle"}).unwrap_or("idle")}),
+            )
+        }
         "review_query" => {
             let connection_id = field(&p, "connectionId")?;
             let session = state.session(connection_id)?;
+            let _access = session.access.read().map_err(|_| locked())?;
             let sql = field(&p, "sql")?;
             if sql.len() > 1024 * 1024 {
                 return Err(Error::new(
@@ -352,6 +456,17 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                     "SQL text is limited to 1 MiB per execution.",
                 ));
             }
+            let generation = if session.config.driver == "mysql" {
+                format!(
+                    "{}:{}",
+                    session.generation,
+                    session
+                        .editor(p["tabId"].as_str().unwrap_or("legacy"), &state.internal)?
+                        .generation
+                )
+            } else {
+                session.generation.clone()
+            };
             let token = uuid::Uuid::new_v4().to_string();
             let mut approvals = state.approvals.lock().map_err(|_| locked())?;
             approvals.retain(|_, a| a.created.elapsed().as_secs() < 120);
@@ -371,7 +486,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                         .transpose()?
                         .unwrap_or_default(),
                     connection_id: connection_id.into(),
-                    generation: session.generation.clone(),
+                    generation,
                     script: p["script"].as_bool().unwrap_or(false),
                     created: std::time::Instant::now(),
                 },
@@ -389,6 +504,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             }
             let id = field(&p, "operationId")?;
             let session = state.session(connection_id)?;
+            let _access = session.access.read().map_err(|_| locked())?;
             let operation = Arc::new(QueryOperation {
                 cancelled: AtomicBool::new(false),
                 interrupt: Mutex::new(None),
@@ -407,7 +523,38 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 operations: &state.operations,
                 id: id.into(),
             };
-            let mut db = session.db.lock().map_err(|_| locked())?;
+            let editor = if session.config.driver == "mysql" {
+                Some(session.editor(p["tabId"].as_str().unwrap_or("legacy"), &state.internal)?)
+            } else {
+                None
+            };
+            if editor
+                .as_ref()
+                .is_some_and(|e| e.lost.load(Ordering::SeqCst))
+            {
+                return Err(Error::new(
+                    "TRANSACTION_LOST",
+                    "This SQL session lost its connection. End the session before running more SQL.",
+                ));
+            }
+            let generation = editor
+                .as_ref()
+                .map(|e| format!("{}:{}", session.generation, e.generation))
+                .unwrap_or_else(|| session.generation.clone());
+            let mut db = if let Some(ref editor) = editor {
+                editor.db.lock().map_err(|_| locked())?
+            } else {
+                session.db.lock().map_err(|_| locked())?
+            };
+            if editor
+                .as_ref()
+                .is_some_and(|e| e.closed.load(Ordering::SeqCst))
+            {
+                return Err(Error::new(
+                    "SESSION_CLOSED",
+                    "This SQL session was closed. Run again in a new session.",
+                ));
+            }
             if operation.cancelled.load(Ordering::SeqCst) {
                 return Err(Error::new(
                     "CANCELLED",
@@ -432,7 +579,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                             && a.sql == sql
                             && a.params == params
                             && a.connection_id == connection_id
-                            && a.generation == session.generation
+                            && a.generation == generation
                             && a.script == p["script"].as_bool().unwrap_or(false)
                             && a.created.elapsed().as_secs() < 120
                     })
@@ -440,7 +587,11 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 false
             };
             let script = p["script"].as_bool().unwrap_or(false);
-            let statements = crate::safety::statements(sql)?;
+            let statements = if session.config.driver == "mysql" {
+                crate::mysql_sql::statements(sql)?
+            } else {
+                crate::safety::statements(sql)?
+            };
             if statements.is_empty() {
                 return Err(Error::new("SQL_EMPTY", "Enter a SQL statement to execute."));
             }
@@ -463,7 +614,11 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 ));
             }
             for s in &statements {
-                crate::safety::validate_sql(s, readonly, confirmed)?;
+                if session.config.driver == "mysql" {
+                    crate::mysql_sql::validate(s, readonly, confirmed)?;
+                } else {
+                    crate::safety::validate_sql(s, readonly, confirmed)?;
+                }
             }
             let settings = state
                 .storage
@@ -480,7 +635,13 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             let mut results = Vec::new();
             let mut error = None;
             let mut result_bytes = 0usize;
+            let mut schema_changed = false;
+            let mut implicit_commit = false;
             for statement in statements {
+                let ddl = ["CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME", "CALL"]
+                    .contains(&crate::safety::first_word(&statement).as_str())
+                    && session.config.driver == "mysql";
+                let was_active = db.transaction_active();
                 if operation.cancelled.load(Ordering::SeqCst) {
                     error = Some(Error::new(
                         "CANCELLED",
@@ -495,8 +656,43 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                     ));
                     break;
                 }
-                match db.query(&statement, &params, limit, readonly, timeout) {
-                    Ok(mut result) => {
+                let outcome = if session.config.driver == "mysql" {
+                    db.mysql_native(&statement, &params, limit, timeout, readonly)
+                } else {
+                    db.query(&statement, &params, limit, readonly, timeout)
+                        .map(|r| vec![r])
+                };
+                if outcome.is_ok() && ddl {
+                    schema_changed = true;
+                    if was_active && !db.transaction_active() {
+                        implicit_commit = true;
+                    }
+                }
+                if let Some(ref editor) = editor {
+                    if outcome.is_err()
+                        && (editor.transaction.load(Ordering::SeqCst) || db.transaction_active())
+                    {
+                        editor.lost.store(true, Ordering::SeqCst);
+                    }
+                    editor
+                        .transaction
+                        .store(db.transaction_active(), Ordering::SeqCst);
+                }
+                match outcome {
+                    Ok(mut sets) if sets.len() > 1 => {
+                        let size = serde_json::to_vec(&sets).map_err(|_| locked())?.len();
+                        if result_bytes.saturating_add(size) > 10 * 1024 * 1024 {
+                            error = Some(Error::new(
+                                "SCRIPT_RESULT_LIMIT",
+                                "Results exceed 10 MiB. Earlier statements may have committed.",
+                            ));
+                            break;
+                        }
+                        result_bytes += size;
+                        results.append(&mut sets);
+                    }
+                    Ok(mut sets) => {
+                        let mut result = sets.pop().unwrap_or_else(ResultSet::empty);
                         let size = serde_json::to_vec(&result)
                             .map_err(|_| {
                                 Error::new("SERIALIZATION", "Cannot encode query results.")
@@ -525,7 +721,21 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             }
             *operation.interrupt.lock().map_err(|_| locked())? = None;
             drop(db);
-            let mut warning = None;
+            let mut warning = if implicit_commit {
+                Some(
+                    "The statement ended the active transaction through an implicit commit. Earlier changes may already be committed.",
+                )
+            } else {
+                None
+            };
+            if schema_changed {
+                if let Ok(mut main) = session.db.lock() {
+                    main.refresh_metadata();
+                }
+                if let Ok(mut monitor) = session.monitor.try_lock() {
+                    monitor.refresh_metadata();
+                }
+            }
             if settings.query_history && state.storage.add_history(&uuid::Uuid::new_v4().to_string(),connection_id,&json!({"sql":sql,"connectionId":connection_id,"createdAt":chrono::Utc::now().to_rfc3339(),"durationMs":start.elapsed().as_millis() as u64,"success":error.is_none(),"rows":results.last().map(|r|r.rows.len())})).is_err() {
                 warning=Some("Local query history could not be saved. The execution results above are authoritative; do not repeat a write just to save history.");
             }
@@ -537,7 +747,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 "Database operation completed"
             );
             Ok(
-                json!({"results":results,"error":error,"warning":warning,"durationMs":start.elapsed().as_millis() as u64}),
+                json!({"schemaChanged":schema_changed,"results":results,"error":error,"warning":warning,"durationMs":start.elapsed().as_millis() as u64,"transactionState":editor.as_ref().map(|e|if e.lost.load(Ordering::SeqCst){"lost"}else if e.transaction.load(Ordering::SeqCst){"active"}else{"idle"}).unwrap_or("idle")}),
             )
         }
         "history" => encode(state.storage.history()?),

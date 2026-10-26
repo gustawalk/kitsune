@@ -2,6 +2,7 @@ import { useSyncExternalStore } from "react";
 import type { Connection, RecordRef, Settings, Tab, Watch } from "./types";
 import { defaults } from "./types";
 interface Workspace {
+  transactions: Record<string, "idle" | "active" | "lost">;
   connections: Connection[];
   activeConnections: string[];
   readOnly: Record<string, boolean>;
@@ -16,6 +17,7 @@ interface Workspace {
   palette: boolean;
 }
 let state: Workspace = {
+  transactions: {},
   connections: [],
   activeConnections: [],
   readOnly: {},
@@ -102,8 +104,11 @@ export function patchTab(id: string, patch: Partial<Tab>) {
 export function closeTab(id: string) {
   const index = state.tabs.findIndex((t) => t.id === id);
   const tabs = state.tabs.filter((t) => t.id !== id);
+  const transactions = { ...state.transactions };
+  delete transactions[id];
   update({
     tabs,
+    transactions,
     activeTab:
       state.activeTab === id
         ? tabs[Math.min(index, tabs.length - 1)]?.id || ""

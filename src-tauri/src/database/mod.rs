@@ -75,7 +75,9 @@ impl Database {
             return Ok(Self::new(Driver::Postgres(postgres::Pg::open(config)?)));
         }
         if config.driver == "mysql" {
-            return Ok(Self::new(Driver::Mysql(mysql::Mysql::open(config)?)));
+            let mut config = config.clone();
+            config.read_only |= force_read_only || config.environment == "production";
+            return Ok(Self::new(Driver::Mysql(mysql::Mysql::open(&config)?)));
         }
         if config.driver == "mssql" {
             return Ok(Self::new(Driver::Mssql(mssql::Mssql::open(config)?)));
@@ -157,6 +159,23 @@ impl Database {
             Driver::Mysql(db) => Some(Arc::new(Interrupt::Mysql(db.cancel_handle()))),
             Driver::Mssql(db) => Some(Arc::new(Interrupt::Mssql(db.cancel_handle()))),
         }
+    }
+    pub fn mysql_native(
+        &mut self,
+        sql: &str,
+        params: &[Value],
+        limit: usize,
+        timeout: u64,
+        read_only: bool,
+    ) -> Result<Vec<ResultSet>, Error> {
+        if let Driver::Mysql(db) = &mut self.driver {
+            db.native(sql, params, limit, timeout, read_only)
+        } else {
+            Err(Error::new("UNSUPPORTED", "Native MySQL session required."))
+        }
+    }
+    pub fn transaction_active(&self) -> bool {
+        matches!(&self.driver, Driver::Mysql(db) if db.transaction_active)
     }
     pub fn mssql_explain(&mut self, sql: &str, params: &[Value]) -> Result<ResultSet, Error> {
         if let Driver::Mssql(db) = &mut self.driver {

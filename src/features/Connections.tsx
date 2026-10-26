@@ -141,7 +141,7 @@ export function ConnectionDialog({
                 },
                 {
                   driver: "mysql",
-                  name: "MySQL / MariaDB · Preview",
+                  name: "MySQL / MariaDB",
                   detail: "Connect to a MySQL or MariaDB server",
                   icon: Database,
                 },
@@ -174,7 +174,7 @@ export function ConnectionDialog({
                           : 5432,
                     sslMode:
                       driver === "mysql"
-                        ? "require"
+                        ? "verify-full"
                         : driver === "mssql"
                           ? "verify-full"
                           : "prefer",
@@ -246,11 +246,11 @@ export function ConnectionDialog({
               </Field>
               {config.driver === "mysql" && (
                 <p className="muted small full">
-                  Requires MariaDB Connector/C 3. Managed writes support InnoDB.
-                  Strict verify-full is blocked because the connector can skip
-                  peer checks; require encrypts without verifying server
-                  identity. DDL, routines and historical restore are
-                  unavailable.
+                  Rust TLS validates the server certificate and hostname in
+                  verify-full mode. Managed edits and restores require InnoDB
+                  tables without triggers or cascading relationships. Native SQL
+                  can execute DDL and routines after review; these may commit
+                  implicitly.
                 </p>
               )}
               {config.driver === "mssql" && (
@@ -313,7 +313,7 @@ export function ConnectionDialog({
                       onValueChange={(value) => patch({ sslMode: value })}
                     >
                       {(config.driver === "mysql"
-                        ? ["disable", "require"]
+                        ? ["disable", "require", "verify-full"]
                         : config.driver === "mssql"
                           ? ["disable", "require", "verify-full"]
                           : [
@@ -327,11 +327,6 @@ export function ConnectionDialog({
                       ).map((s) => (
                         <SelectItem key={s}>{s}</SelectItem>
                       ))}
-                      {config.driver === "mysql" && (
-                        <SelectItem value="verify-full" disabled>
-                          verify-full · unavailable
-                        </SelectItem>
-                      )}
                     </Select>
                   </Field>
                 </>
@@ -398,6 +393,58 @@ export function ConnectionDialog({
                 Production starts read-only. Prefer database credentials
                 restricted to read access.
               </p>
+            )}
+            {config.driver === "mysql" && config.sslMode !== "disable" && (
+              <div className="connection-grid">
+                {(
+                  [
+                    ["tlsCaPath", "Trusted CA (optional)"],
+                    ["tlsCertPath", "Client certificate (optional)"],
+                    ["tlsKeyPath", "Client private key (optional)"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <Field
+                    key={key}
+                    label={label}
+                    hint={
+                      key === "tlsCaPath"
+                        ? "Empty uses system/public roots. Selecting a CA trusts that file exclusively."
+                        : "Client certificate and key must be selected together. Key contents stay in Rust."
+                    }
+                  >
+                    <div className="database-file-picker">
+                      <input
+                        readOnly
+                        value={config[key]}
+                        aria-label={label}
+                        placeholder="No file selected"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() =>
+                          void api<string | null>("choose_tls_file")
+                            .then((path) => {
+                              if (path) patch({ [key]: path });
+                            })
+                            .catch((e) => setError(errorMessage(e)))
+                        }
+                      >
+                        Browse…
+                      </Button>
+                      {config[key] && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => patch({ [key]: "" })}
+                        >
+                          Clear
+                        </Button>
+                      )}
+                    </div>
+                  </Field>
+                ))}
+              </div>
             )}
           </fieldset>
           {error && <ErrorState error={error} />}

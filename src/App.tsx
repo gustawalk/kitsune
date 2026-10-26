@@ -140,6 +140,7 @@ function App() {
       connections: data.connections,
       activeConnections: data.active,
       readOnly: data.readOnly,
+      transactions: data.transactions,
       settings,
       watches: data.watches,
       tabs: restoredTabs,
@@ -230,9 +231,21 @@ function App() {
     };
   }, []);
   function requestClose(tab: Tab) {
-    if (tab.kind === "query" && tab.sql && tab.sql !== tab.savedSql)
+    if (
+      tab.kind === "query" &&
+      ((tab.sql && tab.sql !== tab.savedSql) ||
+        workspace.transactions[tab.id] === "active")
+    )
       setClosing(tab);
-    else closeTab(tab.id);
+    else {
+      if (tab.kind === "query" && tab.connectionId)
+        void api("close_editor_session", {
+          connectionId: tab.connectionId,
+          tabId: tab.id,
+          confirmed: true,
+        }).catch(() => undefined);
+      closeTab(tab.id);
+    }
   }
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -422,7 +435,14 @@ function App() {
                     >
                       <Icon size={14} />
                       <span className="tab-label">
-                        <strong>{tab.title}</strong>
+                        <strong>
+                          {tab.title}
+                          {workspace.transactions[tab.id] === "active"
+                            ? " · TX"
+                            : workspace.transactions[tab.id] === "lost"
+                              ? " · TX lost"
+                              : ""}
+                        </strong>
                         <small>{context}</small>
                       </span>
                       {tab.kind === "query" &&
@@ -595,8 +615,12 @@ function App() {
         <Dialog
           open
           onClose={() => setClosing(undefined)}
-          title="Close unsaved query?"
-          description="Save it first with Ctrl/Cmd+S to keep it in your query library."
+          title={
+            workspace.transactions[closing.id] === "active"
+              ? "Close an active transaction?"
+              : "Close unsaved query?"
+          }
+          description="Closing ends this SQL session and discards uncommitted work. Save query text first with Ctrl/Cmd+S if needed."
         >
           <footer>
             <Button variant="secondary" onClick={() => setClosing(undefined)}>
@@ -605,8 +629,20 @@ function App() {
             <Button
               variant="destructive"
               onClick={() => {
-                closeTab(closing.id);
-                setClosing(undefined);
+                void (
+                  closing.connectionId
+                    ? api("close_editor_session", {
+                        connectionId: closing.connectionId,
+                        tabId: closing.id,
+                        confirmed: true,
+                      })
+                    : Promise.resolve()
+                )
+                  .then(() => {
+                    closeTab(closing.id);
+                    setClosing(undefined);
+                  })
+                  .catch((e) => notify(errorMessage(e), true));
               }}
             >
               Close query

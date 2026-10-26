@@ -269,3 +269,13 @@ test("editing a generated query or switching its connection clears stale bound v
   expect(getWorkspace().tabs[0].boundParams).toBeUndefined();
   closeTab(id);
 });
+
+test("closing a SQL tab removes its transaction marker without affecting another tab", () => {
+  update({ tabs: [], transactions: {} });
+  openTab({ id: "tx-one", kind: "query", title: "One", sql: "" });
+  openTab({ id: "tx-two", kind: "query", title: "Two", sql: "" });
+  update({ transactions: { "tx-one": "active", "tx-two": "lost" } });
+  closeTab("tx-one");
+  expect(getWorkspace().transactions).toEqual({ "tx-two": "lost" });
+  closeTab("tx-two");
+});

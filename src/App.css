@@ -4145,3 +4145,25 @@ html {
     min-height: 180px;
   }
 }
+
+.transaction-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface);
+}
+.transaction-banner > span {
+  flex: 1;
+}
+.transaction-active {
+  color: var(--warning, #dfb66b);
+  border-left: 3px solid currentColor;
+}
+.transaction-lost {
+  color: var(--danger, #ed806b);
+  border-left: 3px solid currentColor;
+}

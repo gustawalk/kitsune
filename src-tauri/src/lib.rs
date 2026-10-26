@@ -7,6 +7,7 @@ mod file_picker;
 mod ipc_tests;
 mod model;
 mod monitor;
+mod mysql_sql;
 mod restore;
 mod safety;
 mod security;

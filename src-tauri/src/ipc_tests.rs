@@ -1637,6 +1637,31 @@ async fn grouped_timed_watches_stop_and_layouts_persist() {
     let _ = std::fs::remove_file(internal);
 }
 
+fn mysql_editor(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    tab: &str,
+    sql: &str,
+    script: bool,
+) -> Json {
+    let mut payload = json!({"connectionId":"test","tabId":tab,"sql":sql,"script":script,"operationId":uuid::Uuid::new_v4().to_string()});
+    let result = call(app, "execute", payload.clone());
+    let response = match result {
+        Err(Error { code, .. }) if code == "CONFIRM_REQUIRED" => {
+            let review = call(app, "review_query", payload.clone()).unwrap();
+            payload["confirmationToken"] = review["token"].clone();
+            call(app, "execute", payload).unwrap()
+        }
+        Ok(value) => value,
+        Err(error) => panic!("Native SQL failed: {error:?}"),
+    };
+    assert!(
+        response["error"].is_null(),
+        "Native SQL error: {}",
+        response["error"]
+    );
+    response
+}
+
 // Fixed loopback endpoints belong only to compose.engines.yaml. Never use a user connection here.
 async fn network_mysql_workflow(port: u16) {
     let (app, path, internal) = app();
@@ -1670,8 +1695,22 @@ async fn network_mysql_workflow(port: u16) {
     let mut verify = config.clone();
     verify.ssl_mode = "verify-full".into();
     assert!(
-        matches!(crate::database::Database::open(&verify,&internal,false),Err(Error{code,..}) if code=="TLS_VERIFY_UNSUPPORTED"),
-        "verify-full must fail closed before authentication until native verification is reliable"
+        matches!(crate::database::Database::open(&verify,&internal,false),Err(Error{code,..}) if code=="TLS_CERTIFICATE"),
+        "verify-full must reject an untrusted certificate without downgrading"
+    );
+    verify.tls_ca_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../.kitsune-engine-tests/tls/ca.pem")
+        .to_string_lossy()
+        .into_owned();
+    let mut trusted = crate::database::Database::open(&verify, &internal, false)
+        .expect("trusted fixture CA must verify the TLS handshake");
+    assert_eq!(
+        trusted
+            .query("SELECT 1", &[], 1, true, 5)
+            .unwrap()
+            .rows
+            .len(),
+        1
     );
     let mut unencrypted = config.clone();
     unencrypted.ssl_mode = "disable".into();
@@ -1681,10 +1720,7 @@ async fn network_mysql_workflow(port: u16) {
     );
     let connected = call(&app, "connect", payload.clone()).unwrap();
     assert_eq!(connected["capabilities"]["supportsTransactionalDdl"], false);
-    assert_eq!(
-        connected["capabilities"]["supportsHistoricalRestore"],
-        false
-    );
+    assert_eq!(connected["capabilities"]["supportsHistoricalRestore"], true);
     let target = json!({"connectionId":"test","table":{"schema":"kitsune_test","name":"orders","kind":"table"},"key":{"id":{"kind":"integer","value":"5821"}}});
     let inspected = call(&app, "record", target.clone()).unwrap();
     let relationships = inspected["relationships"].as_array().unwrap();
@@ -1818,6 +1854,22 @@ async fn network_mysql_workflow(port: u16) {
                         && c["after"]["value"] == "captured")
             );
             assert!(!event.to_string().contains("fixture-secret-not-for-history"));
+            call(
+                &app,
+                "watch_action",
+                json!({"id":"network-order","action":"pause"}),
+            )
+            .unwrap();
+            let review = call(&app, "preview_restore", json!({"eventId":event["id"]}))
+                .expect("full-value MySQL observation must support a reviewed restore");
+            call(&app,"commit_restore",json!({"connectionId":"test","token":review["token"],"operationId":"mysql-restored-event"})).unwrap();
+            assert_eq!(
+                external
+                    .query("SELECT status FROM orders WHERE id=5821", &[], 1, true, 5)
+                    .unwrap()
+                    .rows[0][0],
+                Value::Text("pending".into())
+            );
             break;
         }
         assert!(
@@ -1849,7 +1901,7 @@ async fn network_mysql_workflow(port: u16) {
     let timed = external
         .query("SELECT SLEEP(30)", &[], 1, true, 1)
         .unwrap_err();
-    assert_eq!(timed.code, "INTERRUPTED");
+    assert_eq!(timed.code, "QUERY_TIMEOUT");
     assert!(
         started.elapsed() < Duration::from_secs(6),
         "Server timeout cancellation exceeded 6 seconds"
@@ -1868,6 +1920,159 @@ async fn network_mysql_workflow(port: u16) {
     let (mut external, cancelled) = worker.join().unwrap();
     assert_eq!(cancelled.unwrap_err().code, "INTERRUPTED");
     assert!(external.query("SELECT 1", &[], 1, true, 5).is_ok());
+
+    let begin = mysql_editor(&app, "tx-a", "START TRANSACTION", false);
+    assert_eq!(begin["transactionState"], "active");
+    mysql_editor(
+        &app,
+        "tx-a",
+        "UPDATE orders SET status='uncommitted' WHERE id=5821",
+        false,
+    );
+    let isolated = mysql_editor(
+        &app,
+        "tx-b",
+        "SELECT status FROM orders WHERE id=5821",
+        false,
+    );
+    assert_ne!(isolated["results"][0]["rows"][0][0]["value"], "uncommitted");
+    assert_eq!(
+        call(&app, "bootstrap", json!({})).unwrap()["transactions"]["tx-a"],
+        "active"
+    );
+    assert_eq!(
+        call(
+            &app,
+            "close_editor_session",
+            json!({"connectionId":"test","tabId":"tx-a"})
+        )
+        .unwrap_err()
+        .code,
+        "CONFIRM_REQUIRED"
+    );
+    assert_eq!(
+        mysql_editor(&app, "tx-a", "ROLLBACK", false)["transactionState"],
+        "idle"
+    );
+    mysql_editor(&app, "tx-a", "START TRANSACTION", false);
+    mysql_editor(
+        &app,
+        "tx-a",
+        "UPDATE orders SET status='committed' WHERE id=5821",
+        false,
+    );
+    assert_eq!(
+        mysql_editor(&app, "tx-a", "COMMIT", false)["transactionState"],
+        "idle"
+    );
+    assert_eq!(
+        external
+            .query("SELECT status FROM orders WHERE id=5821", &[], 1, true, 5)
+            .unwrap()
+            .rows[0][0],
+        Value::Text("committed".into())
+    );
+    mysql_editor(
+        &app,
+        "tx-a",
+        "DROP TABLE IF EXISTS kitsune_native_sql",
+        false,
+    );
+    mysql_editor(&app, "tx-a", "START TRANSACTION", false);
+    let ddl = mysql_editor(
+        &app,
+        "tx-a",
+        "CREATE TABLE kitsune_native_sql(id INT PRIMARY KEY, label VARCHAR(50)) ENGINE=InnoDB",
+        false,
+    );
+    assert_eq!(ddl["transactionState"], "idle");
+    assert!(ddl["warning"].as_str().unwrap().contains("implicit commit"));
+    assert_eq!(ddl["schemaChanged"], true);
+    mysql_editor(
+        &app,
+        "tx-a",
+        "ALTER TABLE kitsune_native_sql ADD amount DECIMAL(30,10)",
+        false,
+    );
+    mysql_editor(
+        &app,
+        "tx-a",
+        "CREATE INDEX kitsune_label ON kitsune_native_sql(label)",
+        false,
+    );
+    mysql_editor(
+        &app,
+        "tx-a",
+        "DROP PROCEDURE IF EXISTS kitsune_results",
+        false,
+    );
+    let routine = "DELIMITER $$\nCREATE PROCEDURE kitsune_results() BEGIN SELECT 'first' AS label; SELECT 2 AS number; END$$\nDELIMITER ;\nCALL kitsune_results();";
+    let called = mysql_editor(&app, "tx-a", routine, true);
+    assert!(
+        called["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["rows"][0][0]["value"] == "first")
+    );
+    assert!(
+        called["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["rows"][0][0]["value"] == "2")
+    );
+    mysql_editor(
+        &app,
+        "tx-a",
+        "UPDATE orders o JOIN payments p ON p.order_id=o.id SET o.status='multi-table',p.status='multi-table' WHERE o.id=5821",
+        false,
+    );
+    mysql_editor(&app, "tx-a", "DROP PROCEDURE kitsune_results", false);
+    mysql_editor(&app, "tx-a", "DROP TABLE kitsune_native_sql", false);
+    mysql_editor(&app, "tx-a", "START TRANSACTION", false);
+    mysql_editor(
+        &app,
+        "tx-a",
+        "UPDATE orders SET status='discard-me' WHERE id=5821",
+        false,
+    );
+    call(
+        &app,
+        "close_editor_session",
+        json!({"connectionId":"test","tabId":"tx-a","confirmed":true}),
+    )
+    .unwrap();
+    assert_ne!(
+        external
+            .query("SELECT status FROM orders WHERE id=5821", &[], 1, true, 5)
+            .unwrap()
+            .rows[0][0],
+        Value::Text("discard-me".into())
+    );
+    mysql_editor(&app, "tx-a", "START TRANSACTION", false);
+    let failed = call(&app,"execute",json!({"connectionId":"test","tabId":"tx-a","sql":"SELECT * FROM kitsune_missing_fixture_table","operationId":"lost-native-tx"})).unwrap();
+    assert!(!failed["error"].is_null());
+    assert_eq!(failed["transactionState"], "lost");
+    assert_eq!(
+        call(
+            &app,
+            "editor_status",
+            json!({"connectionId":"test","tabId":"tx-a"})
+        )
+        .unwrap()["transactionState"],
+        "lost"
+    );
+    assert_eq!(call(&app,"execute",json!({"connectionId":"test","tabId":"tx-a","sql":"SELECT 1","operationId":"lost-continuation"})).unwrap_err().code,"TRANSACTION_LOST");
+    call(
+        &app,
+        "close_editor_session",
+        json!({"connectionId":"test","tabId":"tx-a","confirmed":true}),
+    )
+    .unwrap();
+    mysql_editor(&app, "tx-a", "SELECT 1", false);
+    let reviewed = call(&app,"review_query",json!({"connectionId":"test","tabId":"tx-a","sql":"UPDATE orders SET status='cross-tab' WHERE id=5821"})).unwrap();
+    assert_eq!(call(&app,"execute",json!({"connectionId":"test","tabId":"tx-b","sql":"UPDATE orders SET status='cross-tab' WHERE id=5821","confirmationToken":reviewed["token"],"operationId":"cross-tab-token"})).unwrap_err().code,"CONFIRM_REQUIRED");
     call(&app, "disconnect", json!({"id":"test"})).unwrap();
     call(&app, "connect", payload).unwrap();
     assert_eq!(

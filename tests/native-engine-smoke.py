@@ -39,7 +39,23 @@ try:
   if script('return Array.from(document.querySelectorAll("[role=gridcell]")).filter(e=>e.getClientRects().length).length === 2'):break
   time.sleep(.1)
  assert script('return Array.from(document.querySelectorAll("[role=gridcell]")).filter(e=>e.getClientRects().length).some(e=>e.textContent.includes("5821"))'), 'Native SQL query results missing'
- print(json.dumps({'nativeWebKit':True,'engines':summary,'sqlEditor':True,'sqlServerQueryExecuted':True}))
+ # Exercise the real transaction controls and persistent tab marker.
+ result=asyncscript('''const done=arguments[0];(async()=>{const {openTab}=await import('/src/lib/store.ts');openTab({kind:'query',title:'Transaction smoke',connectionId:'native-53306',sql:'SELECT id, status FROM orders ORDER BY id'});done(true)})().catch(e=>done(false));''')
+ time.sleep(.5)
+ script('Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==="Begin transaction").click(); return true;')
+ for _ in range(60):
+  if script('return !!document.querySelector(".transaction-active")'):break
+  time.sleep(.1)
+ assert script('return document.querySelector(".transaction-active")?.textContent.includes("not committed")'), 'Active transaction banner missing'
+ assert script('return document.querySelector(".workspace-tab.active")?.textContent.includes("TX")'), 'Transaction tab marker missing'
+ line=script('const tab=document.querySelector(".workspace-tab.active");const line=getComputedStyle(tab,"::after");return {left:line.left,right:line.right,height:line.height,width:line.width,tabWidth:tab.clientWidth};')
+ assert line['left']=='0px' and line['right']=='0px' and line['height']=='2px', 'Active underline does not span the complete tab'
+ script('Array.from(document.querySelectorAll("button")).find(b=>b.textContent.trim()==="Roll back").click(); return true;')
+ for _ in range(60):
+  if not script('return !!document.querySelector(".transaction-active")'):break
+  time.sleep(.1)
+ assert script('return document.querySelector(".transaction-idle")?.textContent.includes("No active transaction")'), 'Rollback did not clear transaction banner'
+ print(json.dumps({'nativeWebKit':True,'engines':summary,'sqlEditor':True,'sqlServerQueryExecuted':True,'transactionControls':True,'tabUnderline':line}))
 finally:
  if sid:
   try:request('DELETE','/session/'+sid)

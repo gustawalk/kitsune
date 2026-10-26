@@ -10,6 +10,9 @@ export interface ConnectionConfig {
   database: string;
   username: string;
   sslMode: string;
+  tlsCaPath: string;
+  tlsCertPath: string;
+  tlsKeyPath: string;
   path: string;
   readOnly: boolean;
   create: boolean;

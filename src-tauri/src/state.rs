@@ -7,11 +7,21 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
 };
+pub struct EditorSession {
+    pub closed: AtomicBool,
+    pub interrupt: Option<Arc<Interrupt>>,
+    pub generation: String,
+    pub db: Mutex<Database>,
+    pub transaction: AtomicBool,
+    pub lost: AtomicBool,
+}
 pub struct Session {
+    pub access: RwLock<()>,
+    pub editors: Mutex<HashMap<String, Arc<EditorSession>>>,
     pub config: ConnectionConfig,
     pub generation: String,
     pub main_interrupt: Mutex<Option<Arc<Interrupt>>>,
@@ -20,6 +30,48 @@ pub struct Session {
     pub monitor: Mutex<Database>,
     pub read_only: AtomicBool,
     pub connected: AtomicBool,
+}
+impl Session {
+    pub fn editor(
+        &self,
+        id: &str,
+        internal: &std::path::Path,
+    ) -> Result<Arc<EditorSession>, Error> {
+        if id.len() > 128 {
+            return Err(Error::new("VALIDATION", "Invalid SQL tab identifier."));
+        }
+        let mut editors = self
+            .editors
+            .lock()
+            .map_err(|_| Error::new("STATE", "SQL sessions unavailable."))?;
+        if let Some(editor) = editors.get(id) {
+            return Ok(editor.clone());
+        }
+        if editors.len() >= 4 {
+            return Err(Error::new(
+                "EDITOR_LIMIT",
+                "Four SQL sessions are open on this connection. Close a SQL tab to release a session.",
+            ));
+        }
+        let mut config = self.config.clone();
+        config.create = false;
+        config.read_only = self.read_only.load(Ordering::SeqCst);
+        if !config.read_only && config.environment == "production" {
+            config.environment = "custom".into();
+        }
+        let db = Database::open(&config, internal, config.read_only)?;
+        let interrupt = db.interrupt();
+        let editor = Arc::new(EditorSession {
+            closed: AtomicBool::new(false),
+            interrupt,
+            generation: uuid::Uuid::new_v4().to_string(),
+            db: Mutex::new(db),
+            transaction: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
+        });
+        editors.insert(id.into(), editor.clone());
+        Ok(editor)
+    }
 }
 pub struct WatchTask {
     pub stop: Arc<AtomicBool>,
@@ -106,6 +158,14 @@ impl AppState {
             && let Some(s) = sessions.remove(id)
         {
             s.connected.store(false, Ordering::SeqCst);
+            if let Ok(mut editors) = s.editors.lock() {
+                for editor in editors.values() {
+                    if let Some(ref handle) = editor.interrupt {
+                        handle.cancel();
+                    }
+                }
+                editors.clear();
+            }
             if let Ok(handle) = s.main_interrupt.lock()
                 && let Some(handle) = handle.as_ref()
             {

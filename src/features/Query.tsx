@@ -28,13 +28,14 @@ import { DataGrid } from "../components/DataGrid";
 import { Button } from "../components/ui/button";
 import { Dialog } from "../components/ui/dialog";
 import { Empty, ErrorState, Field, copyFeedback } from "../components/shared";
-import { api, errorMessage, useRemote } from "../lib/api";
+import { api, errorMessage, useRemote, invalidate } from "../lib/api";
 import {
   getWorkspace,
   notify,
   openTab,
   patchTab,
   useWorkspace,
+  update,
 } from "../lib/store";
 import { currentStatement } from "../lib/sql";
 import type {
@@ -64,6 +65,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   const [queryName, setQueryName] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
   const editor = useRef<EditorView | null>(null);
+  const preparing = useRef(false);
   const operation = useRef("");
   const pending = useRef("");
   const approval = useRef("");
@@ -87,7 +89,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   );
   const execute = useCallback(
     async (confirmed = false, exactSql?: string) => {
-      if (busy) return;
+      if (busy || preparing.current) return;
       const current = getWorkspace();
       const currentTab = current.tabs.find((t) => t.id === tab.id);
       const connectionId = currentTab?.connectionId;
@@ -97,14 +99,30 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
       }
       const view = editor.current;
       const selection = view?.state.selection.main;
-      const sql =
-        exactSql ??
-        (view && selection && !selection.empty
-          ? view.state.sliceDoc(selection.from, selection.to)
-          : script
-            ? currentTab.sql || ""
-            : currentStatement(currentTab.sql || "", selection?.head || 0));
+      preparing.current = true;
+      let sql: string;
+      try {
+        sql =
+          exactSql ??
+          (view && selection && !selection.empty
+            ? view.state.sliceDoc(selection.from, selection.to)
+            : script
+              ? currentTab.sql || ""
+              : dialect === "mysql"
+                ? (
+                    await api<{ sql: string }>("mysql_statement", {
+                      sql: currentTab.sql || "",
+                      cursor: selection?.head || 0,
+                    })
+                  ).sql
+                : currentStatement(currentTab.sql || "", selection?.head || 0));
+      } catch (e) {
+        preparing.current = false;
+        setError(errorMessage(e));
+        return;
+      }
       if (!sql.trim()) {
+        preparing.current = false;
         setError("Enter or select SQL to execute.");
         return;
       }
@@ -115,6 +133,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
       try {
         const result = await api<Execution>("execute", {
           connectionId,
+          tabId: tab.id,
           sql,
           operationId: operation.current,
           confirmationToken: confirmed ? approval.current : undefined,
@@ -122,6 +141,17 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           params: currentTab?.boundParams || [],
         });
         setExecution(result);
+        if (result.schemaChanged) {
+          invalidate("tables");
+          invalidate("metadata");
+        }
+        if (result.transactionState)
+          update((s) => ({
+            transactions: {
+              ...s.transactions,
+              [tab.id]: result.transactionState!,
+            },
+          }));
         setResultIndex(0);
         if (result.error) setError(result.error.message);
         else notify(`Query completed in ${result.durationMs} ms`);
@@ -132,6 +162,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
             token: string;
           }>("review_query", {
             connectionId,
+            tabId: tab.id,
             sql,
             script,
             params: currentTab?.boundParams || [],
@@ -140,10 +171,11 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           setConfirmation(sql);
         } else setError(errorMessage(e));
       } finally {
+        preparing.current = false;
         setBusy(false);
       }
     },
-    [busy, script, tab.id],
+    [busy, script, tab.id, dialect],
   );
   useEffect(() => {
     const run = () => {
@@ -159,6 +191,34 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
       window.removeEventListener("kitsune:save", save);
     };
   }, [execute]);
+  useEffect(() => {
+    if (dialect !== "mysql") return;
+    if (!connected) {
+      if (getWorkspace().transactions[tab.id] === "active")
+        update((s) => ({
+          transactions: { ...s.transactions, [tab.id]: "lost" },
+        }));
+      return;
+    }
+    let disposed = false;
+    void api<{ transactionState: "idle" | "active" | "lost" }>(
+      "editor_status",
+      { connectionId: tab.connectionId, tabId: tab.id },
+    )
+      .then((r) => {
+        if (
+          !disposed &&
+          getWorkspace().transactions[tab.id] !== r.transactionState
+        )
+          update((s) => ({
+            transactions: { ...s.transactions, [tab.id]: r.transactionState },
+          }));
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [connected, dialect, tab.id, tab.connectionId]);
   async function cancel() {
     try {
       const result = await api<{
@@ -190,12 +250,98 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   }
   return (
     <div className="query-workspace">
+      {dialect === "mysql" && (
+        <div
+          className={`transaction-banner transaction-${workspace.transactions[tab.id] || "idle"}`}
+          role="status"
+        >
+          <span>
+            {!connected
+              ? "SQL session disconnected"
+              : workspace.transactions[tab.id] === "active"
+                ? "Transaction active · changes are not committed"
+                : workspace.transactions[tab.id] === "lost"
+                  ? "Transaction connection lost · verify any unconfirmed writes"
+                  : "No active transaction · statements use server autocommit rules"}
+          </span>
+          {workspace.transactions[tab.id] === "lost" ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() =>
+                void api("close_editor_session", {
+                  connectionId: tab.connectionId,
+                  tabId: tab.id,
+                  confirmed: true,
+                })
+                  .then(() =>
+                    update((s) => ({
+                      transactions: { ...s.transactions, [tab.id]: "idle" },
+                    })),
+                  )
+                  .catch((e) => setError(errorMessage(e)))
+              }
+            >
+              End lost session
+            </Button>
+          ) : workspace.transactions[tab.id] === "active" ? (
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || !connected}
+                onClick={() => void execute(false, "COMMIT")}
+              >
+                Commit
+              </Button>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || !connected}
+                onClick={() => void execute(false, "ROLLBACK")}
+              >
+                Roll back
+              </Button>
+            </>
+          ) : (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy || !connected}
+              onClick={() => void execute(false, "START TRANSACTION")}
+            >
+              Begin transaction
+            </Button>
+          )}
+        </div>
+      )}
       <div className="query-toolbar">
         <Select
           aria-label="Query connection"
           value={tab.connectionId || ""}
-          disabled={busy}
-          onValueChange={(value) => patchTab(tab.id, { connectionId: value })}
+          disabled={busy || workspace.transactions[tab.id] === "active"}
+          onValueChange={(value) => {
+            setBusy(true);
+            void (
+              tab.connectionId && connected
+                ? api("close_editor_session", {
+                    connectionId: tab.connectionId,
+                    tabId: tab.id,
+                  })
+                : Promise.resolve()
+            )
+              .then(() => {
+                patchTab(tab.id, { connectionId: value });
+                setExecution(undefined);
+                setError("");
+                update((s) => ({
+                  transactions: { ...s.transactions, [tab.id]: "idle" },
+                }));
+              })
+              .catch((e) => setError(errorMessage(e)))
+              .finally(() => setBusy(false));
+          }}
         >
           <SelectItem value="">Select connection</SelectItem>
           {workspace.connections.map((c) => (
@@ -213,9 +359,11 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
         <span className="query-dialect">
           {dialect === "mysql"
             ? "MySQL / MariaDB"
-            : dialect === "postgres"
-              ? "PostgreSQL"
-              : "SQLite"}
+            : dialect === "mssql"
+              ? "SQL Server"
+              : dialect === "postgres"
+                ? "PostgreSQL"
+                : "SQLite"}
         </span>
         <Button
           size="sm"

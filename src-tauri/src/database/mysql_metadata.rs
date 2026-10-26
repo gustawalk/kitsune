@@ -22,6 +22,20 @@ impl Database {
             }
         }
         if self.is_mysql() {
+            let triggers=self.query("SELECT COUNT(*) FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=?1 AND EVENT_OBJECT_TABLE=?2",&[Value::Text(table.schema.clone()),Value::Text(table.name.clone())],1,true,5)?;
+            if triggers
+                .rows
+                .first()
+                .and_then(|r| r.first())
+                .and_then(Value::text)
+                .as_deref()
+                != Some("0")
+            {
+                return Err(Error::new(
+                    "TRANSACTION_UNSUPPORTED",
+                    "Generated edits and restores require a table without triggers. Use explicitly reviewed SQL for trigger-bearing tables.",
+                ));
+            }
             let r=self.query("SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=?1 AND TABLE_NAME=?2",&[Value::Text(table.schema.clone()),Value::Text(table.name.clone())],1,true,5)?;
             if r.rows
                 .first()

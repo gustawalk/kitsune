@@ -56,6 +56,7 @@ fn read_record(
     lock: bool,
     columns: &[String],
 ) -> Result<ResultSet, Error> {
+    let locking = lock && (db.is_postgres() || db.is_mysql());
     let pg = db.is_postgres();
     let mut params = Vec::new();
     let mut parts = Vec::new();
@@ -77,7 +78,7 @@ fn read_record(
                 .join(","),
             qualified(&record.table),
             parts.join(" AND "),
-            if pg && lock { " FOR UPDATE" } else { "" }
+            if locking { " FOR UPDATE" } else { "" }
         ),
         &params,
         2,
@@ -273,7 +274,12 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
                     predicates.push(format!("{} IS NULL", crate::safety::quote(&f.column)));
                 } else {
                     params.push(f.value.clone());
-                    let name = if pg
+                    let name = if db.is_mysql() && matches!(f.value, Value::Json(_)) {
+                        format!(
+                            "CAST({} AS CHAR CHARACTER SET utf8mb4)",
+                            crate::safety::quote(&f.column)
+                        )
+                    } else if pg
                         && metadata
                             .columns
                             .iter()
