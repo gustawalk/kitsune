@@ -1,0 +1,144 @@
+name: Build and release desktop application
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kitsune-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun ci
+      - name: Check release versions
+        run: |
+          bun -e 'const p=await Bun.file("package.json").json(); const t=await Bun.file("src-tauri/tauri.conf.json").json(); const c=await Bun.file("src-tauri/Cargo.toml").text(); if(p.version!==t.version || !c.includes(`version = "${p.version}"`)) throw Error("Version mismatch")'
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            test "$GITHUB_REF_NAME" = "v$(bun -p 'require("./package.json").version')"
+            test -s "docs/releases/${GITHUB_REF_NAME}.md"
+          fi
+      - run: bun test
+      - run: bunx prettier --check src tests scripts docs README.md package.json index.html
+      - run: bun run build
+
+  windows:
+    needs: verify
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/checkout@v4
+        with:
+          repository: microsoft/vcpkg
+          ref: 817892b0ecbc6af994dd6df999c73faf795adbf2
+          path: .vcpkg
+      - uses: actions/cache@v4
+        with:
+          path: .vcpkg/installed
+          key: windows-vcpkg-817892b-libpq-libmariadb
+      - name: Prepare database client libraries
+        shell: pwsh
+        run: |
+          ./.vcpkg/bootstrap-vcpkg.bat -disableMetrics
+          ./.vcpkg/vcpkg.exe install libpq:x64-windows libmariadb:x64-windows --disable-metrics
+          "KITSUNE_VCPKG_INSTALLED=$pwd/.vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
+      - run: bun ci
+      - run: bun scripts/prepare-runtime.ts
+      - name: Test Rust
+        shell: pwsh
+        run: |
+          $env:PATH="$env:KITSUNE_VCPKG_INSTALLED/bin;$env:PATH"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: bun run tauri build --bundles nsis --ci --config src-tauri/tauri.runtime.conf.json
+      - name: Check executable identity and installer
+        shell: pwsh
+        run: |
+          $app='src-tauri/target/release/Kitsune.exe'
+          if (!(Test-Path $app)) { throw 'Missing Kitsune.exe' }
+          $info=(Get-Item $app).VersionInfo
+          if ($info.ProductName -ne 'Kitsune') { throw 'Incorrect executable product name' }
+          Add-Type -AssemblyName System.Drawing
+          if (![System.Drawing.Icon]::ExtractAssociatedIcon((Resolve-Path $app))) { throw 'Missing executable icon' }
+          if (!(Get-ChildItem 'src-tauri/target/release/bundle/nsis' -Filter 'Kitsune*setup.exe')) { throw 'Missing Kitsune installer' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kitsune-windows
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    needs: verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install Tauri and database client dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends build-essential libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config xdg-utils libpq-dev libmariadb-dev libfuse2
+      - run: bun ci
+      - run: bun scripts/prepare-runtime.ts
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - run: bun run test:contracts
+      - run: bun run tauri build --bundles deb,appimage --ci --config src-tauri/tauri.runtime.conf.json
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+      - name: Check Linux executable and desktop branding
+        run: |
+          test -x src-tauri/target/release/Kitsune
+          find src-tauri/target/release/bundle/deb -name '*.desktop' -exec grep -l 'Name=Kitsune' {} +
+          ls src-tauri/target/release/bundle/deb/Kitsune*.deb
+          ls src-tauri/target/release/bundle/appimage/Kitsune*.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kitsune-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, windows, linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: kitsune-*
+          path: release-assets
+          merge-multiple: true
+      - name: Publish release downloads
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* --title "Kitsune ${GITHUB_REF_NAME}" --notes-file "docs/releases/${GITHUB_REF_NAME}.md" --verify-tag
