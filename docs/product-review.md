@@ -27,3 +27,9 @@ Corrected stale onboarding engine copy and replaced implementation jargon in the
 5. Resolve MySQL strict certificate authentication before recommending remote production use. verify-full currently fails closed; encryption-only require does not authenticate a server certificate. Keep unsupported operations explicit.
 
 Packaging now uses the product name Kitsune and its coral icon for executables, desktop launchers and NSIS installer/uninstaller. See desktop-builds.md for workflow behavior and verification results.
+
+## MySQL session update — 2026-10-26
+
+After the Rustls/mysql_async update, a fresh local Linux release launch stayed alive for a 10-second smoke test. Sampling the owned process tree from `/proc/*/smaps_rollup` reported **312.7 MiB PSS across nine processes**. This is one empty-workspace sample, not a workload benchmark or a cross-platform guarantee. It is comparable to the earlier baseline; additional active database sessions and results need separate measurements.
+
+The current local Debian package reports **14,563 KiB installed size**, excluding declared system dependencies. Its metadata contains `Package: kitsune`, `Name=Kitsune`, `Exec=Kitsune`, `Icon=Kitsune`, the three configured PNG icon sizes and the executable. Native PostgreSQL still needs libpq; MySQL/MariaDB no longer needs a native client runtime. The final hosted package sizes and validation are tracked in validation.md.
