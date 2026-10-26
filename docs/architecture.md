@@ -1,0 +1,131 @@
+# Architecture
+
+Kitsune separates the webview interface from native database access. React calls a single Tauri `api` entrypoint with an operation and payload. Rust deserializes domain requests, validates identifiers and limits, executes native services, and returns tagged values or stable error codes. Zod validates core responses before components consume them.
+
+## Contracts and frontend state
+
+`src-tauri/src/model.rs` owns database values, metadata, record identities, watches, events, investigations, and settings. `bun run types:generate` produces `src/lib/generated.ts`; `types:check` detects drift. Unsupported contract syntax fails generation. Frontend-only workspace types live in `src/lib/types.ts`.
+
+The current frontend uses a small React request cache and a `useSyncExternalStore` workspace store. Requests reject stale responses, handle Strict Mode cleanup, avoid overlapping refreshes, and invalidate explicitly. Query results, metadata, watches, and history are separate from tab/selection state. Credential forms keep passwords transiently, clear them after connection, and never put them in workspace state.
+
+TanStack Query/Table/Virtual, Zustand and XYFlow were unavailable in the original offline environment. The maintained CodeMirror SQL-language package is now installed and used for native dialect parsing. Functional alternatives were implemented instead of fake adapters or disconnected controls. The grid windows visible rows; the graph uses lightweight DOM nodes and SVG edges. CodeMirror uses dialect language support plus schema/table/column completion. These implementation differences should be reconsidered before treating the original technology specification as fully satisfied.
+
+## Connections and execution
+
+A session owns native interactive and read-only monitoring connections. Blocking driver work runs on Tokio blocking workers, away from the webview thread. Per-session mutexes serialize access to each native connection; four global monitoring permits and one per-session monitoring permit bound background work.
+
+SQLite uses bundled rusqlite. PostgreSQL uses libpq through a narrow, owned native interface. SQLx was not cached and dependency downloads failed; using established native drivers preserved functioning connectivity without implementing authentication or database protocols ourselves. libpq owns TLS, SCRAM, protocol processing, and cancellation.
+
+Session generation identifiers invalidate SQL review tokens after reconnect. Editing saved connection settings disconnects the active session. Write-mode changes and SQL execution acquire the same connection lock so queued execution cannot use a stale access mode. Disconnect marks the session closed, requests interruption, stops watches, and releases connections when in-flight work ends.
+
+SQL review tokens expire after two minutes and are single-use. They bind SQL, parameters, script mode, connection ID, and session generation. The statement delimiter understands quoted strings/identifiers, comments, nested comments, PostgreSQL dollar quotes, and escape strings. It is not a replacement for dialect parsing or database read-only enforcement.
+
+Each statement runs in a managed transaction. Sequential scripts commit each completed statement independently and stop on error. Results have row, byte, and aggregate-script limits. Failures to save local history are warnings alongside the authoritative execution outcome; they do not transform committed SQL into a reported database failure.
+
+## Metadata, paging, and investigation
+
+Adapters preserve database differences. PostgreSQL uses catalog/information-schema metadata and qualified schemas. SQLite uses its actual table/view structure and read-only table-valued metadata functions, with no fabricated schema tree.
+
+Metadata is cached for 60 seconds and explicitly refreshable. Incoming foreign keys are discovered with one dialect-specific catalog/pragma query rather than fetching every table's full structure. Browsing binds filter values, quotes identifiers, appends stable identity tie-breakers, and fetches a next-row sentinel. It does not perform automatic exact counts. Without a usable unique key, paging is explicitly described as potentially unstable.
+
+Record identity prefers the complete primary key, then a nonpartial unique index whose columns are all non-nullable. Missing/null/ambiguous projected key columns disable identity-dependent operations. Composite identifiers remain typed ordered maps.
+
+Detective expands only declared foreign keys, in either direction. Nodes deduplicate by connection, qualified table, and typed identity. Expansion is lazy, capped at 50 rows, depth 3, and 200 nodes. Cycles produce edges between existing nodes. Saved graphs contain references, positions, edges, and selection; fetched labels are removed before persistence. These resource caps are currently fixed, rather than configurable through Settings.
+
+## Monitoring and history
+
+Watch state transitions are serialized with persistence to prevent a completed poll from resurrecting a paused/deleted watch. Cancellation tokens and native interruption handles stop in-flight work. Runtime error overlays remain visible if the metadata store cannot persist an error status. Terminal workers remove their registry entries without removing a newer resumed worker.
+
+The first observation establishes a baseline. Subsequent observations compare typed records by stable keys; unkeyed results compare multisets, preserving duplicates and ignoring row order. Query watches can optionally identify a source table for primary/unique-key comparison. Duplicate keys are rejected. Oversized or incomplete observations produce failures, never synthetic deletions.
+
+Full capture stores excluded-column-filtered before/after states and changed fields. Metadata capture stores no source field values in events. Definitions still need target references to resume. Events above 1 MiB downgrade to metadata capture with an explanation. Historical states never restore data automatically.
+
+Polling can miss intermediate changes and cannot establish authoritative transaction times. After failures, successful recovery starts a fresh baseline rather than pretending the observation gap was covered. PostgreSQL connection-loss recovery may require an explicit reconnect.
+
+## Local persistence
+
+The application database is `kitsune-metadata.sqlite3` in Tauri's platform application-data directory. It is distinct from source databases and blocked as a user connection target. Versioned SQL migrations create document, event, and query-history storage. Local secrets are never serialized as connection properties.
+
+Settings and workspace state persist locally. Bound SQL values are omitted from workspace serialization and saved query/history records. Saved table filters and investigation/watch record references can still contain identifiers. Window geometry is saved on close and restored when supported; Wayland positioning is best effort.
+
+Retention runs at startup, during monitoring, and when settings change. Event payloads are bounded by duration, per-watch count, and global bytes; SQL history has independent count/byte limits. Secure-delete is enabled only for the internal application database. Deletion does not promise erasure from backups, snapshots, or all operating-system caches.
+
+The accepted identifier is `dev.kitsune.app`. Tauri warns that the `.app` suffix can conflict with macOS bundle naming; review this before macOS distribution.
+
+## Schema workspace and shared select
+
+`features/Schema.tsx` coordinates the catalog, selected table details, and explicit diagram loading. `schema_table` returns metadata, incoming foreign keys, and optional actual SQLite DDL. `schema_batch` loads at most 24 metadata records per request, with per-table errors, a 4 MiB response budget, a batch time budget, and native cancellation through the existing operation registry. No source rows are loaded or source settings modified.
+
+`lib/schema.ts` builds a bounded graph from declared foreign keys, condenses cycles, and lays out dependencies. Unavailable references are marked rather than fabricated. The lazily loaded workspace renders at most 200 nodes/1,000 relationships; focused loading uses 40 tables. The native metadata cache is bounded to 256 entries/16 MiB of serialized metadata, in addition to its 60-second freshness policy.
+
+`components/ui/select.tsx` wraps Radix Select with consistent styling and Lucide indicators. External values remain strings/numbers, including zero and empty filter choices. Internal nonempty option encoding avoids Radix's reserved empty item value; a separate visually hidden input preserves raw form values and required-field validation. Invalid submission focuses the visible trigger. New controls should use this component instead of native selects.
+
+Schema tabs deduplicate per connection and can restore the selected table reference. Schema layouts currently remain ephemeral; layout persistence is in the next delivery plan. Source DDL is shown only when it is actually available, rather than pretending generated PostgreSQL SQL is the original definition.
+
+SQLite file selection runs through a narrowly scoped Rust command using Tauri's native dialog plugin. The frontend receives a local Unicode path or a cancellation result, without generic filesystem access or frontend dialog permissions. The GTK dialog backend works with the Linux desktop's display backend, including Wayland. Selection never creates a database; the connection service remains responsible for explicit creation.
+
+SQLite errors are classified into stable permission, format, locking, storage, constraint, syntax, identifier, and parameter categories. Raw SQLite diagnostic strings and SQL text are not returned or logged. Where SQLite reports a syntax location, the message identifies a zero-based UTF-8 byte offset. Editing a query's SQL or changing its connection clears generated bound values; unchanged SQL and unrelated tab edits retain them. This prevents record identifiers from being reused accidentally for unrelated SQL.
+
+## Reviewed cell edits and workspace refinements
+
+The grid's cell editor passes a typed record reference, column, original value, and replacement to `update_cell`. Rust refreshes metadata, resolves the actual base-table kind, requires a complete non-null identity, rejects identity edits and unsupported types, and checks live session write permissions while holding the connection lock. Identifier quoting and bound parameters build an atomic UPDATE with both identity and old-cell predicates. A statement-local uniqueness guard requires exactly one matching identity, including if schema constraints changed between discovery and execution. Zero affected rows produce an edit conflict. This protects the edited cell against stale values; it is not full-record versioning or a transaction-history check. Trigger and constraint behavior belongs to the connected database.
+
+SQLite connections enable foreign-key enforcement through `sqlite3_db_config` via rusqlite. This is connection-local, changes no persisted PRAGMA or journal mode, and applies to explicit editor SQL as well as cell edits. It ensures ordinary edits do not silently bypass declared foreign keys. Credentials, row values and generated edit parameters are not added to query history or logs by the edit endpoint.
+
+Schema layout retains strongly connected component ranking. Within weakly connected groups it performs deterministic neighbor-order sweeps, centers variable-height columns, and packs groups on separate shelves. Cards show six columns plus a link to additional metadata. The same bounded packing utility places Detective expansions; its Arrange action can reorganize saved/manual layouts explicitly. These heuristics reduce clutter but do not guarantee zero edge crossings in dense or cyclic schemas.
+
+Watches now validate declared identity and scope filters before saving; configured query identity cannot silently degrade to membership comparisons when key columns are absent. Invalid watch actions are rejected before stopping a task, and start preconditions are checked before replacing a running task. The dialog retains a saved watch ID if starting fails, avoiding duplicate definitions on retry. Restart/resume baseline semantics remain explicit.
+
+Schema diagram gestures use canvas-owned pointer capture, a four-screen-pixel drag threshold, and pointer-specific cancellation. Node origins and zoom are captured at gesture start; clicks select once on release, while keyboard clicks remain available on card buttons. User interaction freezes automatic framing, including any pending initial-fit timer. No window-level drag listeners remain in the schema diagram. Edges render in a viewport-sized SVG with an SVG group transform, independently of the HTML card transform, avoiding the previous fixed 10,000 × 10,000 SVG. WebKit-prefixed text/HTML drag suppression prevents accidental text selection during graph gestures.
+
+The frontend entry point installs document-level browser interaction guards, including portal content: native context menus are cancelled without stopping event propagation, while unintentional image/link drags are blocked. Explicit `draggable=true` interactions remain available for grid column reordering. Control chrome disables native text selection; editable/data content retains selection and keyboard shortcuts. Development hot replacement removes these listeners before reinstalling them.
+
+## Bulk table writes and live appearance
+
+`database/mutations.rs` builds parameterized plans for inserting a row, updating one column across selected identities, or deleting selected identities. Base-table metadata, eligible non-null unique keys, duplicate selections, field nullability and immutable identity columns are validated in Rust. Selection is bounded to 500 rows, 30,000 parameters and 4 MiB of bound values. Insert omission invokes database defaults rather than substituting guessed values. Binary, array and custom input remains an explicit-SQL workflow.
+
+`preview_table_mutation` stores an expiring approval bound to the connection generation, SQL, parameters and expected affected-row count. `commit_table_mutation` consumes it once, rechecks live write access and executes through `query_checked`. Both SQLite and PostgreSQL verify affected rows before COMMIT and ROLLBACK on a mismatch. A trigger that skips one row therefore cannot leave an unnoticed partial bulk edit. Update predicates include each old cell value; delete targets the selected identities in their current state. SQL transaction guarantees cover transactional database changes; sequence allocation and external trigger side effects retain their database-specific semantics. No restore/undo is promised. Mutations use a bounded 30-second execution timeout and do not append values to query history.
+
+Appearance palettes are centralized in `lib/themes.ts`, validated in frontend and Rust, and resolved through the existing system-theme listener. `save_appearance` merges only theme and density into persisted settings, avoiding accidental persistence of unfinished database/retention drafts. Appearance saves are serialized in click order; UI state updates before IPC completes, and persistence failures remain visible with retry. Comfortable grid density is passed explicitly to the virtualized grid so its row calculations match the new spacing.
+
+## Shared controls, observed-state restoration, and diagnostics
+
+The shared Checkbox uses Radix state and form controls, Lucide check/minus indicators, and theme variables. Tooltip uses one application provider (350 ms delay), portal content, collision handling, and focusable wrappers for disabled triggers. Controls/cells no longer rely on browser title balloons. The watch/history bundle now loads on demand.
+
+New full-value record/table observations carry optional `RestoreSource` provenance: watch kind, SHA-256 fingerprint of relevant table metadata/DDL/constraints, and captured-row completeness. Schema signatures are cached for up to 60 seconds with at most 256 entries; live restore validation clears that cache. Schema changes during a cached observation can make events conservatively non-restorable. Fingerprints do not persist raw schema defaults or DDL. Legacy events deserialize without provenance and are read-only for restoration; metadata downgrade, exclusions and retention remain effective.
+
+`restore_eligibility`, `preview_restore`, `commit_restore`, and `restore_receipt` operate on persisted event IDs. Previews disclose only captured columns, bind SQL values and store a 120-second single-use approval tied to source event contents and connection generation. Query/membership/lifecycle events do not establish restorable source changes. Partial updates restore captured changed fields while comparing all captured newer fields. Record appearance/disappearance inverses require complete record capture. Arrays, unsupported/custom values and non-finite floats are rejected; computed columns are recomputed and verified rather than directly assigned.
+
+Restoration uses an owned transaction: SQLite begins IMMEDIATE; PostgreSQL takes a bounded table lock to protect metadata/trigger checks and selects the record FOR UPDATE. Active user triggers, incoming mutating cascades, and unsupported PostgreSQL partition/inheritance/RLS tables are blocked. SQLite and PostgreSQL compare the live row, revalidate metadata and permissions, execute one inverse, then verify the resulting captured state before commit. Cancellation requested before commit rolls back when observed; a late cancellation request is not a server-side guarantee. Outcomes with unconfirmed commits require verification, not automatic retry.
+
+Restore receipts use the existing local documents collection and contain no duplicate row values. They expire with their source events. Explicit history clearing invalidates pending restore approvals. A receipt-write failure does not mask a confirmed source commit. Watches continue ordinary polling after a restore; no subsequent event is automatically attributed to that action. No metadata migration is required: optional event provenance is backward compatible and receipts use an existing collection.
+
+`diagnose_query` accepts one SELECT/WITH/VALUES statement, typed parameters, an operation ID, and estimate/measure mode. It uses bounded worker capacity and shared cancellation registration. SQLite validates the original prepared statement as read-only before EXPLAIN QUERY PLAN; PostgreSQL uses read-only transactions and JSON EXPLAIN, rejecting modifying plans before measurement. Actual measurement is explicit. PostgreSQL cost is relative planner units, while measured planning/execution times remain separate from driver elapsed time. SQLite reports bounded row consumption and partial completion rather than inventing planner cost. Plans are capped at 1,000 nodes/rows, display preserves unknown raw details, and instrumentation/network differences prevent treating these numbers as an exact application benchmark.
+
+## Workspace tools, filters, exports, and bounded observations
+
+`lib/layout-preferences.ts` hydrates validated values from Rust's `ui_state` document collection and debounces writes. Local edits win over a late load. Pending edits flush on unmount, and the in-memory cache is capped at 128 keys. Column keys encode both the name and occurrence, preserving duplicate result names; removed metadata is reconciled rather than used as an index. Layout values are limited to 512 KiB per key. Saved filters use the same transport but contain explicit user-saved bound values, unlike layout-only documents.
+
+`FilterBuilder` stages typed conditions before application. Rust validates metadata, modes, operators, and a maximum of 16 groups / 100 conditions. Legacy navigation scope is always ANDed with the explicit group expression. `contains` escapes wildcard characters with an explicit dialect-portable escape. Generated queries retain bound parameters and deterministic identity ordering where available.
+
+`exports.rs` streams selected columns in batches of up to 500 under one read transaction; PostgreSQL uses REPEATABLE READ READ ONLY for the multi-page snapshot. Exports have row, byte, timeout, concurrency, and cancellation bounds. The native dialog is invoked in Rust; frontend code receives no arbitrary filesystem-write capability. An adjacent owner-only temporary file is flushed, synced, and atomically hard-linked to a new destination without overwrite. The temporary file is removed on success or error. This requires hard-link support on the destination filesystem. Query failures or cancelled exports do not publish partial data.
+
+Timed watches use a monotonic deadline. Waiting for concurrency permits, polling, and backoff all observe that deadline. An in-flight observation is interrupted and awaited before releasing its permit. Expiration persists a stopped definition and a lifecycle event; restoration after application restart still pauses watches. Group actions return per-watch errors rather than hiding partial failures. Starting/resuming resets both the baseline and duration.
+
+`diagnostic-comparison.ts` retains a bounded in-memory session history; it does not write query plans to metadata. Comparison preserves source SQL/parameter context, distinguishes partial measurements, and reports cost in planner units. These observations are not controlled benchmarks, monetary estimates, or guaranteed performance improvements.
+
+## Native MySQL/MariaDB boundary and portable SELECT AST
+
+`database/mysql.rs` dynamically loads only MariaDB Connector/C 3's ABI, never Oracle's incompatible MYSQL_BIND layout. A process-lifetime, once-initialized library avoids unsafe unload callbacks and repeated loading. Connections remain exclusively owned by session locks; thread-local connector guards balance native thread initialization. Typed numeric parameters use aligned native allocations; text/binary buffers and indicators stay alive through prepared execution. Numbered application parameters are lexed outside opaque quotes/comments, reordered/repeated for native binding, and capped at 30,000 expanded parameters / 4 MiB. Results are fetched incrementally with per-column lengths, base64 binary, exact integer/decimal strings, and a 10 MiB aggregate cap.
+
+Managed transactions use REPEATABLE READ, with READ ONLY enforced by the server on reads. Write targets are conservatively restricted to simple DML, verified as InnoDB, and touched within the transaction to retain metadata locks. Visible triggers are blocked; hidden metadata and external effects still require restricted roles. A per-operation watchdog uses a generation-guarded cancellation handle and a separate native connection to request KILL QUERY. It cannot kill a subsequent operation through a late timer. Connector socket read/write timeouts provide a separate 10-second I/O bound. Native messages and authenticated connection strings are not surfaced. Commit acknowledgement failures remain uncertain outcomes. DDL/routines and strict historical restoration are unavailable for this adapter. `mysql_metadata.rs` owns database-specific catalog/key/index queries; no fictitious SQLite/PostgreSQL schema is substituted.
+
+`lib/sql-portable.ts` implements a bounded lexer, recursive-descent SELECT parser and Pratt expression parser. Its AST keeps names, literals, parameters, joins, predicates and paging distinct. Emission applies dialect quoting/paging/functions and rejects unsupported translations. Explicit conversion, with a generated preview, opens a fresh native query tab. It never intercepts Run or bypasses Rust's safety/approval controls. MySQL positional parameters are rebound in emitted SQL order; numeric literals never pass through JavaScript numbers. SQL Server now also has a native TDS adapter; DuckDB remains preview-only.
+
+`PortableSql.tsx` provides staged input, metadata table templates, live positional errors and output preview. The native editor still accepts the engine's full SQL subject to adapter safety restrictions. `sql_completion` returns structured identifier parts rather than ambiguous dotted strings, so completion quotes names containing dots/spaces correctly. The editor lexer tracks multiline quotes, nested block comments and dollar strings. This is syntax highlighting plus a portable SELECT parser, not a full vendor grammar or universal semantic equivalence engine.
+
+## SQL Server and native editor dialects
+
+The dedicated SQL Server worker owns one Tokio/Tiberius connection and serves typed jobs under the session mutex. Cancellation/timeouts drop that transport; independent work may reconnect, but a lost explicit transaction is invalidated. sqlparser AST checks constrain read SQL and statement kinds; quoted values/comments and native hex/Unicode literals are preserved during placeholder adaptation. Metadata uses SQL Server's sys catalog and OFFSET/FETCH paging, not SQLite PRAGMAs or PostgreSQL system tables. Strict restoration is capability-blocked. Tests exercise actual servers via the existing Rust IPC service layer.
+
+CodeMirror's SQL language compartment now changes with the connection, retaining document/selection/undo state. Native keyword completion and parsing supplement the app's structured metadata suggestions. Portable SELECT compilation stays a separate, explicit preview: it neither intercepts native Run nor claims complete cross-dialect semantic equivalence.

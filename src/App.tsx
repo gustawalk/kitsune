@@ -1,0 +1,834 @@
+import { useLayoutPreference } from "./lib/layout-preferences";
+import { z } from "zod";
+import { Tooltip } from "./components/ui/tooltip";
+import { resolvedTheme } from "./lib/themes";
+import { tabContext } from "./lib/tabs";
+import { modKey } from "./lib/utils";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  AlertCircle,
+  ArrowRight,
+  Check,
+  ChevronRight,
+  Database,
+  Eye,
+  FileCode2,
+  History,
+  LockKeyhole,
+  Network,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Table2,
+  Trash2,
+  X,
+} from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
+import { Sidebar } from "./components/Sidebar";
+import { Palette } from "./components/Palette";
+import { Button } from "./components/ui/button";
+import { Dialog } from "./components/ui/dialog";
+import { ErrorState, Loading, Tag } from "./components/shared";
+import { ConnectionDialog, refreshConnections } from "./features/Connections";
+import { Inspector, DetectiveWorkspace } from "./features/Detective";
+import type { WatchTarget } from "./features/Watches";
+import { api, errorMessage, useRemote } from "./lib/api";
+import {
+  closeTab,
+  getWorkspace,
+  newQuery,
+  notify,
+  openTab,
+  update,
+  useWorkspace,
+} from "./lib/store";
+import {
+  defaults,
+  type Bootstrap,
+  type Connection,
+  type Investigation,
+  type Tab,
+  type Watch,
+} from "./lib/types";
+import "./App.css";
+const WatchDialog = lazy(() =>
+  import("./features/Watches").then((m) => ({ default: m.WatchDialog })),
+);
+const WatchWorkspace = lazy(() =>
+  import("./features/Watches").then((m) => ({ default: m.WatchWorkspace })),
+);
+const TimelineWorkspace = lazy(() =>
+  import("./features/Watches").then((m) => ({ default: m.TimelineWorkspace })),
+);
+const QueryWorkspace = lazy(() =>
+  import("./features/Query").then((m) => ({ default: m.QueryWorkspace })),
+);
+const TableWorkspace = lazy(() =>
+  import("./features/Table").then((m) => ({ default: m.TableWorkspace })),
+);
+const SchemaWorkspace = lazy(() =>
+  import("./features/Schema").then((m) => ({ default: m.SchemaWorkspace })),
+);
+const SettingsWorkspace = lazy(() =>
+  import("./features/Settings").then((m) => ({ default: m.SettingsWorkspace })),
+);
+const HistoryWorkspace = lazy(() =>
+  import("./features/Settings").then((m) => ({ default: m.HistoryWorkspace })),
+);
+const tabIcons = {
+  query: FileCode2,
+  table: Table2,
+  structure: Table2,
+  schema: Database,
+  investigation: Network,
+  watches: Eye,
+  timeline: History,
+  settings: Settings2,
+  history: History,
+};
+function App() {
+  const workspace = useWorkspace();
+  useEffect(() => {
+    document
+      .querySelector<HTMLElement>(".workspace-tab.active")
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [workspace.activeTab]);
+  const bootstrap = useRemote<Bootstrap>("bootstrap", {});
+  const initialized = useRef(false);
+  const [connectionDialog, setConnectionDialog] = useState<{
+    initial?: Connection;
+  } | null>(null);
+  const [watchTarget, setWatchTarget] = useState<WatchTarget>();
+  const [closing, setClosing] = useState<Tab>();
+  const [deleting, setDeleting] = useState<Connection>();
+  const [writeConfirmation, setWriteConfirmation] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useLayoutPreference(
+    "panels:sidebar",
+    z.number().min(200).max(420),
+    254,
+  );
+  const [inspectorWidth, setInspectorWidth] = useLayoutPreference(
+    "panels:inspector",
+    z.number().min(260).max(600),
+    320,
+  );
+  const activeTab = workspace.tabs.find((t) => t.id === workspace.activeTab);
+  const activeSessionConnection = workspace.connections.find(
+    (c) => c.id === (activeTab?.connectionId || workspace.activeConnection),
+  );
+  const sessionId = activeSessionConnection?.id || "";
+  const connected = workspace.activeConnections.includes(sessionId);
+  const readonly =
+    workspace.readOnly[sessionId] ??
+    (activeSessionConnection?.readOnly ||
+      activeSessionConnection?.environment === "production");
+  useEffect(() => {
+    if (!bootstrap.data || initialized.current) return;
+    initialized.current = true;
+    const data = bootstrap.data;
+    const settings = { ...defaults, ...data.settings };
+    const restoredTabs = settings.restoreTabs
+      ? (data.workspace?.tabs || []).filter(
+          (t) => typeof t.id === "string" && t.kind in tabIcons,
+        )
+      : [];
+    update({
+      connections: data.connections,
+      activeConnections: data.active,
+      settings,
+      watches: data.watches,
+      tabs: restoredTabs,
+      activeTab: restoredTabs.some((t) => t.id === data.workspace?.activeTab)
+        ? data.workspace?.activeTab || ""
+        : "",
+      activeConnection:
+        data.workspace?.activeConnection || data.connections[0]?.id || "",
+    });
+  }, [bootstrap.data]);
+  useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme = resolvedTheme(
+        workspace.settings.theme,
+        media.matches,
+      );
+      document.documentElement.dataset.density = workspace.settings.density;
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [workspace.settings.theme, workspace.settings.density]);
+  useEffect(() => {
+    if (!initialized.current || !isTauri()) return;
+    const timeout = setTimeout(() => {
+      void api(
+        "save_workspace",
+        workspace.settings.restoreTabs
+          ? {
+              tabs: workspace.tabs.map(
+                ({ boundParams: _params, ...tab }) => tab,
+              ),
+              activeTab: workspace.activeTab,
+              activeConnection: workspace.activeConnection,
+            }
+          : { tabs: [], activeConnection: workspace.activeConnection },
+      ).catch((e) => notify(errorMessage(e), true));
+    }, 700);
+    return () => clearTimeout(timeout);
+  }, [
+    workspace.tabs,
+    workspace.activeTab,
+    workspace.activeConnection,
+    workspace.settings.restoreTabs,
+  ]);
+  useEffect(() => {
+    const watch = (e: Event) =>
+      setWatchTarget((e as CustomEvent<WatchTarget>).detail);
+    const del = (e: Event) =>
+      setDeleting((e as CustomEvent<Connection>).detail);
+    const connect = (e: Event) =>
+      setConnectionDialog({
+        initial: (e as CustomEvent<Connection | undefined>).detail,
+      });
+    window.addEventListener("kitsune:open-connection", connect);
+    window.addEventListener("kitsune:watch", watch);
+    window.addEventListener("kitsune:delete-connection", del);
+    return () => {
+      window.removeEventListener("kitsune:open-connection", connect);
+      window.removeEventListener("kitsune:watch", watch);
+      window.removeEventListener("kitsune:delete-connection", del);
+    };
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    const cleanup: (() => void)[] = [];
+    void listen<{
+      notify: boolean;
+    }>("watch-event", (e) => {
+      void api<Watch[]>("watches").then((watches) => update({ watches }));
+      if (e.payload.notify)
+        notify(
+          "A watched result changed. Open Time Machine to inspect the observation.",
+        );
+    }).then((fn) => (disposed ? fn() : cleanup.push(fn)));
+    const timer = setInterval(() => {
+      if (getWorkspace().activeConnections.length)
+        void api<Watch[]>("watches")
+          .then((watches) => update({ watches }))
+          .catch(() => undefined);
+    }, 4000);
+    return () => {
+      disposed = true;
+      cleanup.forEach((fn) => fn());
+      clearInterval(timer);
+    };
+  }, []);
+  function requestClose(tab: Tab) {
+    if (tab.kind === "query" && tab.sql && tab.sql !== tab.savedSql)
+      setClosing(tab);
+    else closeTab(tab.id);
+  }
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "k" || key === "p" || (key === "f" && event.shiftKey)) {
+        event.preventDefault();
+        update({ palette: !getWorkspace().palette });
+      } else if (key === "t") {
+        event.preventDefault();
+        newQuery();
+      } else if (key === "w") {
+        event.preventDefault();
+        const s = getWorkspace();
+        const tab = s.tabs.find((t) => t.id === s.activeTab);
+        if (tab) requestClose(tab);
+      } else if (key === ",") {
+        event.preventDefault();
+        openTab({ kind: "settings", title: "Settings" });
+      }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, []);
+  function resize(event: React.PointerEvent, kind: "sidebar" | "inspector") {
+    const x = event.clientX;
+    const initial = kind === "sidebar" ? sidebarWidth : inspectorWidth;
+    const move = (e: PointerEvent) => {
+      if (kind === "sidebar")
+        setSidebarWidth(Math.min(420, Math.max(200, initial + e.clientX - x)));
+      else
+        setInspectorWidth(
+          Math.min(650, Math.max(270, initial - e.clientX + x)),
+        );
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+  async function changeWriteAccess(enabled: boolean) {
+    setBusy(true);
+    try {
+      const result = await api<{
+        readOnly: boolean;
+      }>("set_write_access", {
+        id: sessionId,
+        enabled,
+        confirmed: enabled,
+      });
+      update((s) => ({
+        readOnly: { ...s.readOnly, [sessionId]: result.readOnly },
+      }));
+      setWriteConfirmation(false);
+      notify(
+        enabled
+          ? "Write access enabled for this session."
+          : "Connection is now read-only.",
+      );
+    } catch (e) {
+      notify(errorMessage(e), true);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="app-shell">
+      {workspace.sidebar && (
+        <div className="sidebar-container" style={{ width: sidebarWidth }}>
+          <Sidebar
+            onConnection={(initial) => setConnectionDialog({ initial })}
+          />
+          <div
+            className="vertical-resize"
+            role="separator"
+            aria-label="Resize sidebar"
+            aria-orientation="vertical"
+            onPointerDown={(e) => resize(e, "sidebar")}
+          />
+        </div>
+      )}
+      <div className="app-main">
+        <header className="topbar">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Toggle sidebar"
+            onClick={() => update({ sidebar: !workspace.sidebar })}
+          >
+            <PanelLeft size={16} />
+          </Button>
+          <div className="breadcrumb">
+            <span>{activeSessionConnection?.name || "Workspace"}</span>
+            <ChevronRight size={12} />
+            <strong>{activeTab?.title || "Overview"}</strong>
+          </div>
+          {activeSessionConnection?.environment === "production" && (
+            <Tag tone="danger">PRODUCTION</Tag>
+          )}
+          <div className="spacer" />
+          {connected && (
+            <button
+              className={`safety-mode ${readonly ? "" : "writable"}`}
+              disabled={busy}
+              onClick={() =>
+                readonly
+                  ? setWriteConfirmation(true)
+                  : void changeWriteAccess(false)
+              }
+            >
+              <LockKeyhole size={12} />
+              {readonly ? "Read-only" : "Writes enabled"}
+            </button>
+          )}
+          <button
+            className="global-search"
+            onClick={() => update({ palette: true })}
+          >
+            <Search size={13} />
+            <span>Search anything</span>
+            <kbd>{modKey} K</kbd>
+          </button>
+        </header>
+        <div
+          className="tabs-bar"
+          role="tablist"
+          aria-label="Open workspaces"
+          onKeyDown={(event) => {
+            if ((event.target as HTMLElement).getAttribute("role") !== "tab")
+              return;
+            const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+            if (!keys.includes(event.key)) return;
+            event.preventDefault();
+            const tabs = workspace.tabs;
+            if (!tabs.length) return;
+            const index = tabs.findIndex((t) => t.id === workspace.activeTab);
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? tabs.length - 1
+                  : (index +
+                      (event.key === "ArrowRight" ? 1 : -1) +
+                      tabs.length) %
+                    tabs.length;
+            update({ activeTab: tabs[next].id });
+            const controls =
+              event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                '[role="tab"]',
+              );
+            controls[next]?.focus();
+            controls[next]?.scrollIntoView({
+              block: "nearest",
+              inline: "nearest",
+            });
+          }}
+        >
+          <button
+            className={`home-tab ${!workspace.activeTab ? "active" : ""}`}
+            onClick={() => update({ activeTab: "" })}
+            aria-label="Workspace overview"
+          >
+            <img src="/icon.svg" alt="" width={15} height={15} />
+          </button>
+          <div className="tabs-scroll">
+            {workspace.tabs.map((tab) => {
+              const Icon = tabIcons[tab.kind];
+              const context = tabContext(
+                tab,
+                workspace.connections.find((c) => c.id === tab.connectionId)
+                  ?.name,
+              );
+              return (
+                <div
+                  className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
+                  key={tab.id}
+                  data-kind={tab.kind}
+                >
+                  <Tooltip content={`${tab.title} · ${context}`}>
+                    <button
+                      role="tab"
+                      tabIndex={tab.id === workspace.activeTab ? 0 : -1}
+                      aria-selected={tab.id === workspace.activeTab}
+                      onClick={() => update({ activeTab: tab.id })}
+                    >
+                      <Icon size={14} />
+                      <span className="tab-label">
+                        <strong>{tab.title}</strong>
+                        <small>{context}</small>
+                      </span>
+                      {tab.kind === "query" &&
+                        tab.sql &&
+                        tab.sql !== tab.savedSql && (
+                          <span className="unsaved-dot" />
+                        )}
+                    </button>
+                  </Tooltip>
+                  <button
+                    className="tab-close"
+                    aria-label={`Close ${tab.title}`}
+                    onClick={() => requestClose(tab)}
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => newQuery()}
+            title="New SQL tab (Ctrl/Cmd+T)"
+          >
+            <Plus size={16} />
+          </Button>
+        </div>
+        <div className="main-content">
+          <main className="workspace-content">
+            {bootstrap.error && (
+              <div className="bootstrap-error">
+                <ErrorState
+                  error={bootstrap.error}
+                  retry={() => void bootstrap.refresh()}
+                />
+              </div>
+            )}
+            {!workspace.activeTab && (
+              <Welcome onConnection={() => setConnectionDialog({})} />
+            )}
+            <Suspense fallback={<Loading label="Opening workspace…" />}>
+              {workspace.tabs.map((tab) => (
+                <div
+                  className="tab-content"
+                  key={tab.id}
+                  hidden={tab.id !== workspace.activeTab}
+                >
+                  {tab.kind === "query" ? (
+                    <QueryWorkspace tab={tab} />
+                  ) : tab.kind === "table" || tab.kind === "structure" ? (
+                    <TableWorkspace tab={tab} />
+                  ) : tab.kind === "schema" ? (
+                    <SchemaWorkspace key={tab.connectionId} tab={tab} />
+                  ) : tab.kind === "investigation" ? (
+                    <DetectiveWorkspace tab={tab} />
+                  ) : tab.kind === "watches" ? (
+                    <WatchWorkspace />
+                  ) : tab.kind === "timeline" ? (
+                    <TimelineWorkspace tab={tab} />
+                  ) : tab.kind === "settings" ? (
+                    <SettingsWorkspace />
+                  ) : (
+                    <HistoryWorkspace />
+                  )}
+                </div>
+              ))}
+            </Suspense>
+          </main>
+          {workspace.inspector && (
+            <div
+              className="inspector-container"
+              style={{ width: inspectorWidth }}
+            >
+              <div
+                className="vertical-resize left"
+                role="separator"
+                aria-label="Resize inspector"
+                aria-orientation="vertical"
+                onPointerDown={(e) => resize(e, "inspector")}
+              />
+              <Inspector
+                record={workspace.inspector}
+                onClose={() => update({ inspector: null })}
+              />
+            </div>
+          )}
+        </div>
+        <footer className="statusbar">
+          <span className={`connection-dot ${connected ? "online" : ""}`} />
+          <span>
+            {connected ? activeSessionConnection?.name : "No active connection"}
+          </span>
+          {connected && (
+            <span className="status-driver">
+              {activeSessionConnection?.driver === "postgres"
+                ? "PostgreSQL"
+                : activeSessionConnection?.driver === "mysql"
+                  ? "MySQL / MariaDB"
+                  : activeSessionConnection?.driver === "mssql"
+                    ? "SQL Server"
+                    : "SQLite"}
+            </span>
+          )}
+          <div className="spacer" />
+          <button
+            onClick={() => openTab({ kind: "watches", title: "Live Watch" })}
+          >
+            <Eye size={12} />
+            {
+              workspace.watches.filter((w) => w.status === "running").length
+            }{" "}
+            watches running
+          </button>
+          <span className="status-local">
+            <ShieldCheck size={12} />
+            Local first
+          </span>
+          <span>Kitsune 0.1.0</span>
+        </footer>
+      </div>
+      {workspace.toast && (
+        <div
+          className={`toast ${workspace.toast.error ? "toast-error" : ""}`}
+          role={workspace.toast.error ? "alert" : "status"}
+        >
+          {workspace.toast.error ? (
+            <AlertCircle size={17} />
+          ) : (
+            <Check size={17} />
+          )}
+          <span>{workspace.toast.message}</span>
+          <button
+            onClick={() => update({ toast: null })}
+            aria-label="Dismiss notification"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {workspace.palette && (
+        <Palette onConnection={() => setConnectionDialog({})} />
+      )}{" "}
+      {connectionDialog && (
+        <ConnectionDialog
+          initial={connectionDialog.initial}
+          onClose={() => setConnectionDialog(null)}
+        />
+      )}{" "}
+      {watchTarget && (
+        <Suspense
+          fallback={
+            <Dialog
+              open
+              title="Watch settings"
+              onClose={() => setWatchTarget(undefined)}
+            >
+              <Loading label="Opening watch settings…" />
+            </Dialog>
+          }
+        >
+          <WatchDialog
+            target={watchTarget}
+            onClose={() => setWatchTarget(undefined)}
+          />
+        </Suspense>
+      )}{" "}
+      {closing && (
+        <Dialog
+          open
+          onClose={() => setClosing(undefined)}
+          title="Close unsaved query?"
+          description="Save it first with Ctrl/Cmd+S to keep it in your query library."
+        >
+          <footer>
+            <Button variant="secondary" onClick={() => setClosing(undefined)}>
+              Keep editing
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                closeTab(closing.id);
+                setClosing(undefined);
+              }}
+            >
+              Close query
+            </Button>
+          </footer>
+        </Dialog>
+      )}
+      {deleting && (
+        <Dialog
+          open
+          onClose={() => setDeleting(undefined)}
+          title="Delete saved connection?"
+          description={`Disconnect and remove “${deleting.name}”. Its source database is not deleted.`}
+        >
+          <footer>
+            <Button variant="secondary" onClick={() => setDeleting(undefined)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void api("delete_connection", { id: deleting.id })
+                  .then(async () => {
+                    await refreshConnections();
+                    setDeleting(undefined);
+                    notify("Saved connection deleted");
+                  })
+                  .catch((e) => notify(errorMessage(e), true))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <Trash2 size={14} />
+              Delete connection
+            </Button>
+          </footer>
+        </Dialog>
+      )}
+      {writeConfirmation && (
+        <Dialog
+          open
+          onClose={() => setWriteConfirmation(false)}
+          title="Enable session write access?"
+          description={`${activeSessionConnection?.name} · ${activeSessionConnection?.environment}`}
+        >
+          <p className="notice">
+            SQL will be allowed to modify data and schema on this connection.
+            Production read-only protection resets when reconnecting. Watches
+            remain read-only.
+          </p>
+          <footer>
+            <Button
+              variant="secondary"
+              onClick={() => setWriteConfirmation(false)}
+            >
+              Keep read-only
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => void changeWriteAccess(true)}
+            >
+              Enable writes for this session
+            </Button>
+          </footer>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+function Welcome({ onConnection }: { onConnection: () => void }) {
+  const workspace = useWorkspace();
+  const bootstrap = useRemote<Bootstrap>("bootstrap", {}, isTauri());
+  const [deleting, setDeleting] = useState<Investigation>();
+  return (
+    <div className="welcome">
+      <div className="welcome-content">
+        <div className="welcome-brand">
+          <img src="/icon.svg" width={48} height={48} alt="" />
+          <span>
+            KITSUNE <span>狐</span>
+          </span>
+        </div>
+        <h1>Understand your data.</h1>
+        <p className="welcome-description">
+          Follow the relationships. Observe the changes.
+          <br />
+          Find the story behind every record.
+        </p>
+        <div className="welcome-actions">
+          <Button onClick={onConnection}>
+            <Plus size={15} />
+            {workspace.connections.length
+              ? "Add connection"
+              : "Connect your first database"}
+          </Button>
+          <Button variant="secondary" onClick={() => newQuery()}>
+            <FileCode2 size={15} />
+            New query<kbd>{modKey} T</kbd>
+          </Button>
+        </div>
+        <div className="workflow-intro">
+          <div>
+            <span className="workflow-number">01</span>
+            <Network size={20} />
+            <h3>Explore</h3>
+            <p>
+              Start with a record.
+              <br />
+              Follow its relationships.
+            </p>
+          </div>
+          <ArrowRight size={15} />
+          <div>
+            <span className="workflow-number">02</span>
+            <Eye size={20} />
+            <h3>Observe</h3>
+            <p>
+              Watch what changes.
+              <br />
+              Keep your context.
+            </p>
+          </div>
+          <ArrowRight size={15} />
+          <div>
+            <span className="workflow-number">03</span>
+            <History size={20} />
+            <h3>Investigate</h3>
+            <p>
+              Review captured changes.
+              <br />
+              Understand what happened.
+            </p>
+          </div>
+        </div>
+        <div className="welcome-divider" />
+        {!!bootstrap.data?.investigations.length ? (
+          <div className="saved-investigations">
+            <div className="section-label">Saved investigations</div>
+            {bootstrap.data.investigations.map((i) => (
+              <div key={i.id}>
+                <button
+                  onClick={() =>
+                    openTab({
+                      kind: "investigation",
+                      title: i.name,
+                      root: i.root,
+                      connectionId: i.root.connectionId,
+                      investigation: i,
+                    })
+                  }
+                >
+                  <Network size={15} />
+                  <span>{i.name}</span>
+                  <small>{i.root.table.name}</small>
+                  <ChevronRight size={14} />
+                </button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  title="Delete investigation"
+                  onClick={() => setDeleting(i)}
+                >
+                  <Trash2 size={13} />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="welcome-tip">
+            <Database size={16} />
+            <p>
+              {workspace.connections.length
+                ? "Open a table and select a record to start an investigation."
+                : "Connect PostgreSQL or SQLite to start exploring."}
+            </p>
+          </div>
+        )}
+        <div className="welcome-shortcuts">
+          <span>
+            <kbd>{modKey} K</kbd>Command palette
+          </span>
+          <span>
+            <kbd>{modKey} P</kbd>Find a table
+          </span>
+          <button
+            onClick={() => openTab({ kind: "settings", title: "Settings" })}
+          >
+            <Settings2 size={13} />
+            Preferences
+          </button>
+        </div>
+      </div>
+      <div className="welcome-footer">
+        <ShieldCheck size={12} />
+        Your connections, queries, and investigations stay local.
+      </div>
+      {deleting && (
+        <Dialog
+          open
+          onClose={() => setDeleting(undefined)}
+          title="Delete investigation?"
+          description={deleting.name}
+        >
+          <footer>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                void api("delete_investigation", { id: deleting.id })
+                  .then(() => {
+                    setDeleting(undefined);
+                    void bootstrap.refresh();
+                  })
+                  .catch((e) => notify(errorMessage(e), true));
+              }}
+            >
+              Delete investigation
+            </Button>
+          </footer>
+        </Dialog>
+      )}
+    </div>
+  );
+}
+export default App;

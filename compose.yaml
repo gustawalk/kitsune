@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: kitsune_test
+      POSTGRES_PASSWORD: kitsune_test
+      POSTGRES_DB: kitsune_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ./tests/fixtures/postgres.sql:/docker-entrypoint-initdb.d/001-fixture.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kitsune_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

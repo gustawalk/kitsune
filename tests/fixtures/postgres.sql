@@ -1,0 +1,25 @@
+-- Run only in the disposable kitsune_test database supplied by compose.yaml.
+CREATE TABLE kitsune_fixture_identity(marker TEXT PRIMARY KEY);
+INSERT INTO kitsune_fixture_identity VALUES('kitsune-disposable-network-v1');
+CREATE TABLE customers(id BIGINT PRIMARY KEY,name TEXT NOT NULL,email TEXT,preferred_address_id BIGINT);
+CREATE TABLE addresses(id BIGINT PRIMARY KEY,customer_id BIGINT REFERENCES customers(id),city TEXT,street TEXT);
+ALTER TABLE customers ADD CONSTRAINT preferred_address_fk FOREIGN KEY(preferred_address_id) REFERENCES addresses(id);
+CREATE TABLE products(id BIGINT PRIMARY KEY,name TEXT NOT NULL,price NUMERIC(30,9),attributes JSONB);
+CREATE TABLE orders(id BIGINT PRIMARY KEY,customer_id BIGINT NOT NULL REFERENCES customers(id),status TEXT NOT NULL DEFAULT 'pending',total NUMERIC(30,9),metadata JSONB,secret_token TEXT,placed_at TIMESTAMPTZ);
+CREATE TABLE order_items(order_id BIGINT REFERENCES orders(id),line_number INTEGER,product_id BIGINT REFERENCES products(id),quantity INTEGER,PRIMARY KEY(order_id,line_number));
+CREATE TABLE payments(id BIGINT PRIMARY KEY,order_id BIGINT REFERENCES orders(id),status TEXT,amount NUMERIC(30,9),receipt BYTEA);
+CREATE TABLE no_identity(note TEXT);
+CREATE TABLE composite_parent(tenant TEXT,code TEXT,label TEXT,PRIMARY KEY(tenant,code));
+CREATE TABLE composite_child(id BIGINT PRIMARY KEY,tenant TEXT,code TEXT,FOREIGN KEY(tenant,code) REFERENCES composite_parent(tenant,code));
+CREATE INDEX orders_customer_idx ON orders(customer_id);
+CREATE VIEW pending_orders AS SELECT id,customer_id,status,total FROM orders WHERE status='pending';
+INSERT INTO customers VALUES(1,'Avery Kim','avery@example.test',NULL),(2,'Sam Rivera',NULL,NULL);
+INSERT INTO addresses VALUES(10,1,'Curitiba','Example Street');
+UPDATE customers SET preferred_address_id=10 WHERE id=1;
+INSERT INTO products VALUES(100,'Field notebook',19.95,'{"color":"orange"}'),(101,'Desk lamp',79,'{"wattage":12}');
+INSERT INTO orders VALUES(5821,1,'pending',118.9,'{"source":"test","nullable":null}','fixture-secret-not-for-history','2026-01-01T12:00:00Z'),(5822,2,'completed',99999999999999999.123456789,'{}',NULL,NULL);
+INSERT INTO order_items VALUES(5821,1,100,2),(5821,2,101,1);
+INSERT INTO payments VALUES(700,5821,'authorized',118.9,'\x00ff80');
+INSERT INTO composite_parent VALUES('acme','A','Composite parent');
+INSERT INTO composite_child VALUES(1,'acme','A');
+INSERT INTO products SELECT n,'Product '||n,1,NULL FROM generate_series(1000,5999) n;
