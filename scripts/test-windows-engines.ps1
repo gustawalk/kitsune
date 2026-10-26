@@ -43,6 +43,7 @@ datadir=$($data.Replace('\','/'))
 bind-address=127.0.0.1
 port=$($server.Port)
 require-secure-transport=ON
+ssl-ca=$tls/ca.pem
 ssl-cert=$tls/server.pem
 ssl-key=$tls/server-key.pem
 init-file=$($init.Replace('\','/'))

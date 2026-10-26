@@ -167,6 +167,44 @@ async function certificates() {
       cert,
     ]);
   }
+  run([
+    "openssl",
+    "req",
+    "-new",
+    "-newkey",
+    "rsa:2048",
+    "-noenc",
+    "-keyout",
+    join(directory, "client-key.pem"),
+    "-out",
+    join(directory, "client.csr"),
+    "-subj",
+    "/CN=Kitsune fixture client",
+  ]);
+  await Bun.write(
+    join(directory, "client.ext"),
+    "basicConstraints=critical,CA:FALSE\nkeyUsage=digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\n",
+  );
+  run([
+    "openssl",
+    "x509",
+    "-req",
+    "-in",
+    join(directory, "client.csr"),
+    "-CA",
+    join(directory, "ca.pem"),
+    "-CAkey",
+    join(directory, "ca-key.pem"),
+    "-CAcreateserial",
+    "-days",
+    "2",
+    "-extfile",
+    join(directory, "client.ext"),
+    "-out",
+    join(directory, "client.pem"),
+  ]);
+  chmodSync(join(directory, "client-key.pem"), 0o600);
+  chmodSync(join(directory, "ca.pem"), 0o644);
   // Bind individual files so container service accounts can read them; host parent stays private.
   chmodSync(join(root, ".kitsune-engine-tests"), 0o700);
   chmodSync(directory, 0o700);

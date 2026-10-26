@@ -25,3 +25,6 @@ INSERT INTO payments VALUES(700,5821,'authorized',118.9,X'00FF80');
 INSERT INTO composite_parent VALUES('acme','A','Composite parent');
 INSERT INTO composite_child VALUES(1,'acme','A');
 INSERT INTO exact_values VALUES(18446744073709551615,12345678901234567890.12345678901234567890,'',NULL,X'00FF80');
+
+CREATE USER 'kitsune_mtls'@'%' IDENTIFIED BY 'kitsune_test' REQUIRE X509;
+GRANT ALL ON kitsune_test.* TO 'kitsune_mtls'@'%';

@@ -23,11 +23,12 @@ services:
       MYSQL_USER: kitsune_test
       MYSQL_PASSWORD: kitsune_test
       MYSQL_DATABASE: kitsune_test
-    command: ["--require-secure-transport=ON", "--ssl-cert=/etc/kitsune-test/server.pem", "--ssl-key=/etc/kitsune-test/server-key.pem"]
+    command: ["--require-secure-transport=ON", "--ssl-ca=/etc/kitsune-test/ca.pem", "--ssl-cert=/etc/kitsune-test/server.pem", "--ssl-key=/etc/kitsune-test/server-key.pem"]
     ports: ["127.0.0.1:53306:3306"]
     tmpfs: ["/var/lib/mysql"]
     volumes:
       - ./tests/fixtures/mysql.sql:/docker-entrypoint-initdb.d/001-fixture.sql:ro
+      - ./.kitsune-engine-tests/tls/ca.pem:/etc/kitsune-test/ca.pem:ro
       - ./.kitsune-engine-tests/tls/server.pem:/etc/kitsune-test/server.pem:ro
       - ./.kitsune-engine-tests/tls/server-key.pem:/etc/kitsune-test/server-key.pem:ro
     healthcheck:
@@ -42,11 +43,12 @@ services:
       MARIADB_USER: kitsune_test
       MARIADB_PASSWORD: kitsune_test
       MARIADB_DATABASE: kitsune_test
-    command: ["--require-secure-transport=ON", "--ssl-cert=/etc/kitsune-test/server.pem", "--ssl-key=/etc/kitsune-test/server-key.pem"]
+    command: ["--require-secure-transport=ON", "--ssl-ca=/etc/kitsune-test/ca.pem", "--ssl-cert=/etc/kitsune-test/server.pem", "--ssl-key=/etc/kitsune-test/server-key.pem"]
     ports: ["127.0.0.1:53307:3306"]
     tmpfs: ["/var/lib/mysql"]
     volumes:
       - ./tests/fixtures/mysql.sql:/docker-entrypoint-initdb.d/001-fixture.sql:ro
+      - ./.kitsune-engine-tests/tls/ca.pem:/etc/kitsune-test/ca.pem:ro
       - ./.kitsune-engine-tests/tls/server.pem:/etc/kitsune-test/server.pem:ro
       - ./.kitsune-engine-tests/tls/server-key.pem:/etc/kitsune-test/server-key.pem:ro
     healthcheck:

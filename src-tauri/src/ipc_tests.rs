@@ -1712,6 +1712,32 @@ async fn network_mysql_workflow(port: u16) {
             .len(),
         1
     );
+    let mut mutual = verify.clone();
+    mutual.username = "kitsune_mtls".into();
+    assert!(
+        crate::database::Database::open(&mutual, &internal, false).is_err(),
+        "client certificate was not required"
+    );
+    let tls_directory =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.kitsune-engine-tests/tls");
+    mutual.tls_cert_path = tls_directory
+        .join("client.pem")
+        .to_string_lossy()
+        .into_owned();
+    mutual.tls_key_path = tls_directory
+        .join("client-key.pem")
+        .to_string_lossy()
+        .into_owned();
+    let mut mutual_db = crate::database::Database::open(&mutual, &internal, false)
+        .expect("client certificate authentication must work");
+    assert_eq!(
+        mutual_db
+            .query("SELECT 1", &[], 1, true, 5)
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
     let mut unencrypted = config.clone();
     unencrypted.ssl_mode = "disable".into();
     assert!(
