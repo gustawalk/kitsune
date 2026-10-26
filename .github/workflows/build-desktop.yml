@@ -15,6 +15,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -35,6 +36,7 @@ jobs:
   windows:
     needs: verify
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -102,6 +104,7 @@ jobs:
   linux:
     needs: verify
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -113,9 +116,10 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
       - name: Install Tauri and database client dependencies
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends build-essential libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config xdg-utils libpq-dev libmariadb-dev libfuse2
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install --yes --no-install-recommends build-essential libayatana-appindicator3-dev libgtk-3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev patchelf pkg-config xdg-utils libpq-dev libmariadb-dev libfuse2
       - run: bun ci
       - run: bun scripts/prepare-runtime.ts
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
