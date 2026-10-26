@@ -460,21 +460,27 @@ pub async fn run<R: tauri::Runtime>(
     }
     if expired {
         let _gate = state.watch_gate.lock();
-        if !stop.load(Ordering::SeqCst)
-            && state.tasks.lock().is_ok_and(|tasks| {
-                tasks
+        let removed_current_task = !stop.load(Ordering::SeqCst)
+            && state.tasks.lock().is_ok_and(|mut tasks| {
+                let owns_task = tasks
                     .get(&watch.id)
-                    .is_some_and(|t| Arc::ptr_eq(&t.stop, &stop))
-            })
-        {
+                    .is_some_and(|task| Arc::ptr_eq(&task.stop, &stop));
+                if owns_task {
+                    tasks.remove(&watch.id);
+                }
+                owns_task
+            });
+        if removed_current_task {
             watch.status = "stopped".into();
             watch.last_error = None;
-            let _ = state.storage.put("watches", &watch.id, &watch);
+            // Publish terminal status only after task cleanup and the lifecycle event.
+            // Readers can observe storage without taking watch_gate.
             let _ = state.storage.event(&lifecycle(
                 &watch,
                 "watchStopped",
                 "Timed watch completed. Changes after this point are not observed.",
             ));
+            let _ = state.storage.put("watches", &watch.id, &watch);
             let _ = app.emit("watch-status", &watch.id);
         }
     }
