@@ -6,6 +6,26 @@ use sqlparser::{
     parser::Parser,
 };
 use std::ops::ControlFlow;
+pub fn first_word(mut sql: &str) -> String {
+    loop {
+        sql = sql.trim_start();
+        if sql.starts_with('#')
+            || (sql.starts_with("--") && sql.as_bytes().get(2).is_none_or(u8::is_ascii_whitespace))
+        {
+            sql = sql.split_once('\n').map_or("", |(_, rest)| rest);
+        } else if sql.starts_with("/*!") || sql.starts_with("/*M!") {
+            return "EXECUTABLE".into();
+        } else if sql.starts_with("/*") {
+            sql = sql.split_once("*/").map_or("", |(_, rest)| rest);
+        } else {
+            break;
+        }
+    }
+    sql.chars()
+        .take_while(char::is_ascii_alphabetic)
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
 pub fn statements(sql: &str) -> Result<Vec<String>, Error> {
     if sql.len() > 1024 * 1024 {
         return Err(Error::new("SQL_LIMIT", "SQL text is limited to 1 MiB."));
@@ -198,7 +218,7 @@ impl Visitor for ReadCheck {
     }
 }
 pub fn validate(sql: &str, readonly: bool, confirmed: bool) -> Result<(), Error> {
-    let word = crate::safety::first_word(sql);
+    let word = first_word(sql);
     if ["LOAD", "INSTALL", "UNINSTALL", "SHUTDOWN"].contains(&word.as_str()) {
         return Err(Error::new(
             "SQL_UNSUPPORTED",
@@ -292,6 +312,11 @@ mod tests {
     #[test]
     fn readonly_and_reviews() {
         assert!(validate("SELECT 1", true, false).is_ok());
+        assert_eq!(
+            first_word("# dialect comment\n/* metadata */ CREATE TABLE t(id INT)"),
+            "CREATE"
+        );
+        assert!(validate("# read comment\nSELECT 1", true, false).is_ok());
         for sql in [
             "CALL p()",
             "DROP TABLE t",

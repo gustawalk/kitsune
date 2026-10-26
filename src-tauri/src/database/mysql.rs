@@ -411,7 +411,9 @@ async fn run(conn: &mut Conn, work: Work, owned: &mut bool) -> Result<Reply, Err
             read_only,
             ..
         } => {
-            if read_only && ["BEGIN", "START"].contains(&crate::safety::first_word(&sql).as_str()) {
+            if read_only
+                && ["BEGIN", "START"].contains(&crate::mysql_sql::first_word(&sql).as_str())
+            {
                 sql = "START TRANSACTION READ ONLY".into();
             }
             execute(conn, &sql, &params, limit).await?
@@ -465,6 +467,13 @@ async fn run(conn: &mut Conn, work: Work, owned: &mut bool) -> Result<Reply, Err
     })
 }
 fn parameters(sql: &str, params: &[Value]) -> Result<(String, Params), Error> {
+    if params.len() > 30_000 || serde_json::to_vec(params).map_err(failure)?.len() > 4 * 1024 * 1024
+    {
+        return Err(Error::new(
+            "PARAMETER_LIMIT",
+            "Bound values exceed the 30,000 parameter / 4 MiB limit.",
+        ));
+    }
     let mut output = String::new();
     let mut bound = Vec::new();
     let mut chars = sql.char_indices().peekable();
@@ -483,7 +492,20 @@ fn parameters(sql: &str, params: &[Value]) -> Result<(String, Params), Error> {
                     }
                 }
             }
-            '-' if chars.peek().is_some_and(|(_, v)| *v == '-') => {
+            '#' => {
+                for (_, v) in chars.by_ref() {
+                    output.push(v);
+                    if v == '\n' {
+                        break;
+                    }
+                }
+            }
+            '-' if {
+                let mut look = chars.clone();
+                look.next().is_some_and(|(_, v)| v == '-')
+                    && look.next().is_none_or(|(_, v)| v.is_ascii_whitespace())
+            } =>
+            {
                 for (_, v) in chars.by_ref() {
                     output.push(v);
                     if v == '\n' {
@@ -502,6 +524,12 @@ fn parameters(sql: &str, params: &[Value]) -> Result<(String, Params), Error> {
                 }
             }
             '?' => {
+                if bound.len() >= 30_000 {
+                    return Err(Error::new(
+                        "PARAMETER_LIMIT",
+                        "Expanded parameters exceed 30,000 values.",
+                    ));
+                }
                 let mut number = String::new();
                 while chars.peek().is_some_and(|(_, v)| v.is_ascii_digit()) {
                     number.push(chars.next().unwrap().1)
@@ -642,7 +670,7 @@ async fn execute(
     let start = Instant::now();
     if matches!(&params,Params::Positional(p) if p.is_empty())
         && !["SELECT", "WITH", "VALUES", "SHOW", "EXPLAIN"]
-            .contains(&crate::safety::first_word(&sql).as_str())
+            .contains(&crate::mysql_sql::first_word(&sql).as_str())
     {
         collect(conn.query_iter(sql).await.map_err(failure)?, limit, start).await
     } else {
@@ -716,6 +744,13 @@ mod tests {
     use super::*;
     #[test]
     fn binds_opaque_strings_and_exact_values() {
+        let (commented, bindings) = parameters(
+            "SELECT ?1 # ?999\n, 2--1 + ?1 -- ?999\n",
+            &[Value::Integer("3".into())],
+        )
+        .unwrap();
+        assert_eq!(commented, "SELECT ? # ?999\n, 2--1 + ? -- ?999\n");
+        assert!(matches!(bindings, Params::Positional(v) if v == vec![Wire::Int(3), Wire::Int(3)]));
         let (sql, p) = parameters(
             "SELECT '?1', ?2, ?1",
             &[Value::Integer("18446744073709551615".into()), Value::Null],

@@ -638,8 +638,16 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             let mut schema_changed = false;
             let mut implicit_commit = false;
             for statement in statements {
-                let ddl = ["CREATE", "ALTER", "DROP", "TRUNCATE", "RENAME", "CALL"]
-                    .contains(&crate::safety::first_word(&statement).as_str())
+                let ddl = [
+                    "CREATE",
+                    "ALTER",
+                    "DROP",
+                    "TRUNCATE",
+                    "RENAME",
+                    "CALL",
+                    "EXECUTABLE",
+                ]
+                .contains(&crate::mysql_sql::first_word(&statement).as_str())
                     && session.config.driver == "mysql";
                 let was_active = db.transaction_active();
                 if operation.cancelled.load(Ordering::SeqCst) {
