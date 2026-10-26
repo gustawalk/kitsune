@@ -20,11 +20,11 @@ The workflow pins Bun 1.4.0, uses Cargo's locked dependency graph, caches Rust c
 
 SQLite is bundled in Rust; SQL Server uses the Rust TDS driver. PostgreSQL loads libpq and MySQL/MariaDB loads MariaDB Connector/C 3.
 
-`scripts/prepare-runtime.ts` stages the client libraries that ordinary link-time dependency scanning cannot discover. On Windows it copies vcpkg release DLLs, their dependencies and license notices into the installed application directory. `scripts/check-windows-package.ps1` silently installs the setup into an isolated runner directory, checks the installed `Kitsune.exe` product name and coral icons in both application and setup, and loads both installed database DLLs with dependencies resolved from the installed directory and system paths.
+`scripts/prepare-runtime.ts` stages the client libraries that ordinary link-time dependency scanning cannot discover. On Windows it copies vcpkg release DLLs, their dependencies, the release MSVC runtime DLLs and license notices into the installed application directory. `scripts/check-windows-package.ps1` silently installs the setup into an isolated runner directory, checks the installed `Kitsune.exe` product name and coral icons in both application and setup, and loads both installed database DLLs with dependencies resolved from the installed directory and system paths.
 
 The Debian package declares `libpq5` and `libmariadb3` dependencies. AppImage staging explicitly includes both shared libraries, their discovered dependencies and available license notices. AppImage still depends on a supported host graphics/webview environment; creating an archive is not proof that it launches on every Linux distribution.
 
-Local development builds require native client libraries installed separately. Windows packaging requires `KITSUNE_VCPKG_INSTALLED` pointing at vcpkg's installed `x64-windows` directory, then:
+Local development builds require native client libraries installed separately. Windows packaging requires `KITSUNE_VCPKG_INSTALLED` pointing at vcpkg's installed `x64-windows` directory and `KITSUNE_MSVC_REDIST` pointing at Visual Studio's x64 `Microsoft.VC*.CRT` redistributable directory, then:
 
 ```sh
 bun scripts/prepare-runtime.ts

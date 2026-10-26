@@ -59,6 +59,10 @@ jobs:
           ./.vcpkg/bootstrap-vcpkg.bat -disableMetrics
           ./.vcpkg/vcpkg.exe install libpq:x64-windows libmariadb:x64-windows --disable-metrics
           "KITSUNE_VCPKG_INSTALLED=$pwd/.vcpkg/installed/x64-windows" >> $env:GITHUB_ENV
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
+          $redist = Get-ChildItem "$vs/VC/Redist/MSVC/*/x64/Microsoft.VC*.CRT" -Directory | Sort-Object FullName -Descending | Select-Object -First 1
+          if (!$redist) { throw 'Missing x64 MSVC redistributable DLL directory' }
+          "KITSUNE_MSVC_REDIST=$($redist.FullName)" >> $env:GITHUB_ENV
       - run: bun ci
       - run: bun scripts/prepare-runtime.ts
       - name: Test Rust

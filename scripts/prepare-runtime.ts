@@ -16,9 +16,18 @@ if (process.platform === "win32") {
   }
   for (const name of ["libpq.dll", "libmariadb.dll"])
     await readFile(join(runtime, name));
+  const redist = process.env.KITSUNE_MSVC_REDIST;
+  if (!redist)
+    throw Error(
+      "Set KITSUNE_MSVC_REDIST to the x64 Microsoft.VC*.CRT redistributable directory.",
+    );
+  for (const file of await readdir(redist)) {
+    if (file.endsWith(".dll"))
+      await cp(join(redist, file), join(runtime, file));
+  }
   const resources: Record<string, string> = {};
   for (const file of await readdir(runtime))
-    resources[`runtime/${file}`] = file;
+    if (file.endsWith(".dll")) resources[`runtime/${file}`] = file;
   await cp(join(installed, "share"), join(runtime, "licenses"), {
     recursive: true,
   });
