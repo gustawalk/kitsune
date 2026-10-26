@@ -1,3 +1,13 @@
+# Current MySQL/MariaDB implementation
+
+The earlier Connector/C notes below are historical and superseded. The adapter now uses mysql_async/Rustls, strict CA/hostname validation, isolated native SQL-tab transactions, DDL/routines/multiple results, multi-table writes and eligible conflict-checked InnoDB historical restore. Managed edits still reject visible triggers; restore also rejects cascading relationships. Native read-only checks and server transaction defaults remain enforced. MySQL/MariaDB need no native client runtime.
+
+Linux live fixtures passed MySQL 8.4 and MariaDB 11.4 extended workflows, including trusted/untrusted/wrong-host TLS, exact values, metadata, edits, watches, restore, diagnostics, cancellation/recovery, commit/rollback/isolation, implicit DDL commits, native routines/results, lost sessions and cross-tab approval rejection. Native WebKit verified all four engine grids, SQL execution, Begin/Rollback, the TX marker and full-width active underline. Current hosted Windows/Linux results are recorded in validation.md when complete.
+
+Windows CI uses checksum-pinned portable MySQL 8.4.7 and MariaDB 11.4.9 archives, disposable data directories, loopback-only ports and no Windows services. Sources: [MySQL archive](https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.7-winx64.zip), [MariaDB archive/checksums](https://archive.mariadb.org/mariadb-11.4.9/winx64-packages/). Both run the same identity-guarded IPC workflows as Linux. Cleanup kills only owned process IDs and removes only their temporary directories. TLS files remain under the ignored fixture directory.
+
+## Previous verification record
+
 # Main engine verification
 
 The main engines are PostgreSQL, MySQL, MariaDB and SQL Server. SQLite remains supported. DuckDB adapter work is deferred at the user's request.

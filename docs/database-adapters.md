@@ -24,15 +24,21 @@ Types include booleans, integers, numeric/decimal strings, floats, JSON/JSONB te
 
 Keep native connection/authentication/type handling inside Rust. Implement bounded execution, database-specific identifier/parameter rules, metadata, cancellation outcomes, identity discovery, and safe read-only operations. Extend capabilities and shared contracts where the new database differs. A generic string-only driver must not erase type or safety differences.
 
-## MySQL / MariaDB preview
+## MySQL / MariaDB
 
-Native prepared statements use MariaDB Connector/C 3, loaded lazily from the platform loader. MySQL and MariaDB share this adapter; no Oracle Connector/C ABI is loaded. The selected database acts as the catalog namespace. Native composite keys, incoming/outgoing relationships, indexes, column defaults and base-table/view distinctions come from information_schema. Prefix/functional indexes are excluded as reliable identities.
+`database/mysql.rs` owns a mysql_async connection on a bounded Tokio worker; Rustls supplies TLS. No Connector/C ABI, MySQL DLL, or MariaDB shared library is required. Catalog/key/index metadata remains in `mysql_metadata.rs`, including composite relationships and reliable-identity eligibility.
 
-Ordinary reads, server paging, JSON EXPLAIN and bounded direct measurements are available. InnoDB DML supports reviewed application edits with affected-row checks before commit. Source schema mutation/routines, multi-table DML and historical restore are unavailable. SQL session settings ANSI_QUOTES and NO_BACKSLASH_ESCAPES are connection-local to support shared identifier/string rules. TLS choices are explicit disable or encryption-only require. verify-full fails closed before connection because the connector cannot guarantee strict CA/hostname verification for private endpoints.
+verify-full validates the certificate chain and hostname against system/public roots. A selected custom CA replaces those roots; optional client certificate/key files stay in Rust. require explicitly disables certificate and hostname verification while requiring encryption. disable is plaintext. No automatic fallback is used. Live fixtures test trusted, untrusted and wrong-host certificates against both engines.
 
-Linux embedded-server tests exercise the Rust native statement boundary against real MariaDB tables without sockets. Live MySQL 8.x/MariaDB network authentication, TLS, interrupted connections and cancellation still need a disposable remote/socket fixture on an unrestricted host. Windows/macOS are unverified. Native client libraries are optional runtime dependencies and are not bundled by this change.
+The native SQL editor has a separate connection per tab (maximum four per saved connection), while generated operations and watches retain managed transactions. Native DDL, routines, multiple result sets, multi-table DML, session variables and transactions are supported subject to explicit review. DELIMITER directives are parsed client-side. The session enables ANSI_QUOTES and NO_BACKSLASH_ESCAPES for shared generated SQL; callers changing these modes must account for editor lexer assumptions. The portable SELECT translator remains optional and explicit.
 
-SQL Server now has its own adapter, described below. DuckDB remains a SQL-preview dialect only; adapter work is deferred.
+Transaction status comes from server protocol flags. Frontend banners and tab labels expose active/lost status; Commit/Rollback are explicit. DDL can commit implicitly; a warning appears when it ends an active transaction. Closing a live transaction requires confirmation. Any native execution failure discards that connection; lost transactions cannot silently continue on a replacement. Interrupted writes remain uncertain. A bounded control connection requests KILL QUERY before the interrupted connection is discarded; acknowledgement is not promised.
+
+Managed grid edits require InnoDB, reject visible triggers and verify affected rows before commit. Historical restore also rejects incoming CASCADE/SET NULL relationships, locks the record and rechecks captured state/schema. Privileges can hide trigger metadata: use restricted, appropriate accounts and treat these checks as conservative application guards rather than a general SQL sandbox. Native reviewed SQL remains available for engine operations outside managed editing guarantees.
+
+Integers (including unsigned 64-bit) and decimals stay exact strings; null, binary, text, dates/timestamps and JSON remain distinct. MariaDB JSON aliases follow the metadata the server reports. Result limits close the session instead of draining an unbounded response, and statements may already have committed. Large individual protocol fields can still be allocated by the driver before aggregate limits reject them.
+
+MySQL 8.4 and MariaDB 11.4 have disposable live workflows covering metadata, relationships, editing, watches, restore, strict TLS, timeout/cancel recovery, transactions, native DDL and routine result sets. Linux and Windows verification evidence is recorded separately; macOS remains unverified. DuckDB connectivity is deferred.
 
 ## SQL Server / Tiberius
 

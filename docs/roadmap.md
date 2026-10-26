@@ -31,10 +31,10 @@ Potential later work includes Kitsune Replay with reviewed relational exports an
 ## Agreed next deliveries
 
 1. Delivered workspace/grid polish, grouped filters/saved presets, bounded exports, diagnostic comparison, and timed/grouped watches; native graphical acceptance remains pending.
-2. MySQL/MariaDB now has a preview adapter. Complete live network/TLS/cancellation acceptance, then add SQL Server and DuckDB adapters when their client dependencies are available.
+2. MySQL/MariaDB supports strict TLS, native SQL sessions, transactions, routines and eligible historical restore. Continue broader server-version/type coverage; DuckDB connectivity stays deferred.
 
 This delivery adds shared themed checkbox/tooltips, reviewed watch-event restoration, and read-only query plans with explicit measurement. Graphical acceptance and live PostgreSQL verification remain required before calling those paths fully verified.
 
 ## SQL engines update
 
-PostgreSQL, MySQL, MariaDB and SQL Server now pass live server workflows and Linux native WebKit table/query smoke tests. SQL Server has its own TDS adapter; CodeMirror uses maintained native dialect parsing. DuckDB adapter work is deferred. MySQL verify-full is blocked after live testing found that Connector/C skips private-peer verification. Complete Windows/macOS acceptance and remaining detailed desktop workflows; see main-engine-verification.md.
+PostgreSQL, MySQL, MariaDB and SQL Server now pass live server workflows and Linux native WebKit table/query smoke tests. SQL Server has its own TDS adapter; CodeMirror uses maintained native dialect parsing. DuckDB adapter work is deferred. MySQL verify-full now uses Rustls to enforce certificate and hostname verification. Complete Windows/macOS acceptance and remaining detailed desktop workflows; see main-engine-verification.md.
