@@ -142,13 +142,13 @@ export function ConnectionDialog({
                 {
                   driver: "mysql",
                   name: "MySQL / MariaDB · Preview",
-                  detail: "Connect using MariaDB Connector/C 3",
+                  detail: "Connect to a MySQL or MariaDB server",
                   icon: Database,
                 },
                 {
                   driver: "mssql",
                   name: "SQL Server",
-                  detail: "Encrypted TDS connection",
+                  detail: "Connect to a SQL Server instance",
                   icon: Database,
                 },
                 {

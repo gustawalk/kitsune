@@ -781,7 +781,7 @@ function Welcome({ onConnection }: { onConnection: () => void }) {
             <p>
               {workspace.connections.length
                 ? "Open a table and select a record to start an investigation."
-                : "Connect PostgreSQL or SQLite to start exploring."}
+                : "Connect a server or open a SQLite file to start exploring."}
             </p>
           </div>
         )}
