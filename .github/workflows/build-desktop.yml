@@ -118,6 +118,8 @@ jobs:
         with:
           workspaces: src-tauri
           cache-on-failure: true
+      - name: Make room for disposable server images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
       - name: Install Tauri and database client dependencies
         timeout-minutes: 10
         run: |
