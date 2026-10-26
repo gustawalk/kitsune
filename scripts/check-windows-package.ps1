@@ -50,4 +50,16 @@ foreach ($entry in @(@('libpq.dll','PQlibVersion'),@('libmariadb.dll','mysql_get
     if ([KitsuneNativeCheck]::GetProcAddress($handle,$entry[1]) -eq [IntPtr]::Zero) { throw "Driver API missing: $($entry[1])" }
   } finally { [void][KitsuneNativeCheck]::FreeLibrary($handle) }
 }
-Write-Host 'Installed Kitsune executable, installer icons and native database driver dependencies verified.'
+$launched=Start-Process -FilePath $app -PassThru
+try {
+  Start-Sleep -Seconds 5
+  $launched.Refresh()
+  if ($launched.HasExited) { throw "Installed Kitsune exited during startup: $($launched.ExitCode)" }
+} finally {
+  if (!$launched.HasExited) {
+    [void]$launched.CloseMainWindow()
+    if (!$launched.WaitForExit(5000)) { Stop-Process -Id $launched.Id -Force }
+  }
+  $launched.Dispose()
+}
+Write-Host 'Installed Kitsune launch, executable name, coral icons and native database driver dependencies verified.' 

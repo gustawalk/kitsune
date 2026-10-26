@@ -74,16 +74,8 @@ jobs:
           key: windows-vcpkg-817892b-release-libpq-libmariadb
       - run: bun ci
       - run: bun scripts/prepare-runtime.ts
-      - name: Test Rust
-        shell: pwsh
-        run: |
-          $env:PATH="$pwd/src-tauri/runtime;$env:PATH"
-          # The test process needs the same release CRT as the installed application.
-          # Keep it beside test executables so a stale system/PATH DLL cannot win.
-          New-Item -ItemType Directory -Force src-tauri/target/debug/deps | Out-Null
-          Copy-Item src-tauri/runtime/*.dll src-tauri/target/debug/deps/
-          cargo test --manifest-path src-tauri/Cargo.toml --locked
-          if ($LASTEXITCODE -ne 0) { throw 'Rust tests failed' }
+      - name: Test Rust with Windows activation manifest
+        run: bun run test:rust
       - run: bun run tauri build --bundles nsis --ci --config src-tauri/tauri.runtime.conf.json
       - name: Install and check executable, icons and database DLLs
         shell: pwsh
