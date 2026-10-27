@@ -24,6 +24,35 @@ fn config(path: String) -> ConnectionConfig {
 fn temp_path() -> std::path::PathBuf {
     std::env::temp_dir().join(format!("kitsune-test-{}.sqlite3", uuid::Uuid::new_v4()))
 }
+pub(crate) fn assert_keyset_paging(db: &mut Database, table: TableRef, expect_next_page: bool) {
+    let mut request = BrowseRequest {
+        filter_groups: vec![],
+        group_mode: "all".into(),
+        connection_id: "fixture".into(),
+        table,
+        filters: vec![],
+        sort: String::new(),
+        descending: false,
+        offset: 0,
+        keyset: true,
+        cursor: None,
+        limit: 1,
+    };
+    let first = db.browse(&request).unwrap();
+    assert!(first.keyset_supported);
+    if expect_next_page {
+        assert!(first.truncated);
+        let cursor = first.next_cursor.expect("page cursor");
+        request.cursor = Some(cursor);
+        request.offset = 1;
+        let second = db.browse(&request).unwrap();
+        assert_eq!(second.rows.len(), 1);
+        assert!(!second.truncated);
+    } else {
+        assert!(!first.truncated);
+        assert!(first.next_cursor.is_none());
+    }
+}
 #[test]
 fn saved_config_has_no_password() {
     let c = config("test.sqlite".into());
@@ -73,11 +102,13 @@ fn sqlite_end_to_end_metadata_composite_identity_and_safe_values() {
             filter_groups: vec![],
             group_mode: "all".into(),
             connection_id: "test".into(),
-            table,
+            table: table.clone(),
             filters: vec![],
             sort: String::new(),
             descending: false,
             offset: 0,
+            keyset: false,
+            cursor: None,
             limit: 100,
         })
         .unwrap();
@@ -98,6 +129,20 @@ fn sqlite_end_to_end_metadata_composite_identity_and_safe_values() {
         })
         .unwrap();
     assert_eq!(child.foreign_keys[0].columns.len(), 2);
+    let advice = db.index_advice(&table).unwrap();
+    assert_eq!(advice.recommendations.len(), 1);
+    assert_eq!(advice.recommendations[0].direction, "incoming");
+    assert_eq!(advice.recommendations[0].columns, vec!["x", "y"]);
+    db.query(
+        "CREATE INDEX child_parent_idx ON child(x,y)",
+        &[],
+        10,
+        false,
+        30,
+    )
+    .unwrap();
+    db.refresh_metadata();
+    assert!(db.index_advice(&table).unwrap().recommendations.is_empty());
     assert!(db.query("DELETE FROM parent", &[], 100, true, 30).is_err());
     assert!(
         db.query("ATTACH ':memory:' AS other", &[], 100, false, 30)
@@ -154,6 +199,8 @@ fn bounded_browsing_and_parameterized_filters() {
         sort: String::new(),
         descending: false,
         offset: 0,
+        keyset: false,
+        cursor: None,
         limit: 2,
     };
     let result = db.browse(&req).unwrap();
@@ -165,6 +212,170 @@ fn bounded_browsing_and_parameterized_filters() {
         value: Value::Text("missing' OR 1=1 --".into()),
     }];
     assert!(db.browse(&req).unwrap().rows.is_empty());
+    drop(db);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn keyset_paging_handles_composite_keys_in_both_directions() {
+    let path = temp_path();
+    let mut db =
+        Database::open(&config(path.to_string_lossy().into()), &temp_path(), false).unwrap();
+    db.query(
+        "CREATE TABLE keyset_rows(a INTEGER NOT NULL,b TEXT NOT NULL,label TEXT,PRIMARY KEY(a,b))",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    db.query(
+        "INSERT INTO keyset_rows VALUES(1,'a','one-a'),(1,'b','one-b'),(2,'a','two-a'),(2,'b','two-b')",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    let mut request = BrowseRequest {
+        filter_groups: vec![],
+        group_mode: "all".into(),
+        connection_id: "test".into(),
+        table: TableRef {
+            schema: String::new(),
+            name: "keyset_rows".into(),
+            kind: "table".into(),
+        },
+        filters: vec![],
+        sort: String::new(),
+        descending: false,
+        offset: 0,
+        keyset: true,
+        cursor: None,
+        limit: 2,
+    };
+
+    let first = db.browse(&request).unwrap();
+    assert!(first.keyset_supported);
+    assert!(first.truncated);
+    assert_eq!(first.rows.len(), 2);
+    assert_eq!(
+        first.next_cursor,
+        Some(vec![Value::Integer("1".into()), Value::Text("b".into())])
+    );
+
+    request.cursor = first.next_cursor;
+    let second = db.browse(&request).unwrap();
+    assert_eq!(second.rows.len(), 2);
+    assert!(!second.truncated);
+    assert_eq!(second.rows[0][0], Value::Integer("2".into()));
+    assert_eq!(second.rows[0][1], Value::Text("a".into()));
+
+    request.cursor = None;
+    request.descending = true;
+    let reverse_first = db.browse(&request).unwrap();
+    assert!(reverse_first.keyset_supported);
+    assert_eq!(reverse_first.rows[0][0], Value::Integer("2".into()));
+    assert_eq!(reverse_first.rows[0][1], Value::Text("b".into()));
+    request.cursor = reverse_first.next_cursor;
+    let reverse_second = db.browse(&request).unwrap();
+    assert_eq!(reverse_second.rows[0][0], Value::Integer("1".into()));
+    assert_eq!(reverse_second.rows[0][1], Value::Text("b".into()));
+
+    request.cursor = Some(vec![Value::Integer("1".into())]);
+    assert_eq!(db.browse(&request).unwrap_err().code, "CURSOR_INVALID");
+
+    db.query(
+        "CREATE TABLE no_stable_key(value TEXT)",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    db.query(
+        "INSERT INTO no_stable_key VALUES('a'),('b')",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    request.table.name = "no_stable_key".into();
+    request.cursor = None;
+    request.offset = 0;
+    request.limit = 1;
+    let fallback = db.browse(&request).unwrap();
+    assert!(!fallback.keyset_supported);
+    assert!(fallback.next_cursor.is_none());
+    assert_eq!(fallback.rows.len(), 1);
+    drop(db);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn sqlite_row_estimate_uses_analyze_statistics_without_mutating_the_table() {
+    let path = temp_path();
+    let mut db =
+        Database::open(&config(path.to_string_lossy().into()), &temp_path(), false).unwrap();
+    db.query(
+        "CREATE TABLE estimate_rows(id INTEGER PRIMARY KEY,value TEXT)",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    db.query(
+        "INSERT INTO estimate_rows VALUES(1,'a'),(2,'b'),(3,'c')",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    db.query(
+        "CREATE INDEX estimate_rows_value_idx ON estimate_rows(value)",
+        &[],
+        100,
+        false,
+        30,
+    )
+    .unwrap();
+    let table = TableRef {
+        schema: String::new(),
+        name: "estimate_rows".into(),
+        kind: "table".into(),
+    };
+    let unavailable = db.estimate_rows(&table).unwrap();
+    assert_eq!(unavailable.total, None);
+    assert!(unavailable.source.contains("ANALYZE"));
+
+    db.query("ANALYZE estimate_rows", &[], 10, false, 30)
+        .unwrap();
+    db.refresh_metadata();
+    let estimate = db.estimate_rows(&table).unwrap();
+    assert_eq!(estimate.total, Some(3));
+    assert_eq!(estimate.source, "SQLite ANALYZE statistics");
+    assert_eq!(
+        db.count_rows(&BrowseRequest {
+            filter_groups: vec![],
+            group_mode: "all".into(),
+            connection_id: "test".into(),
+            table,
+            filters: vec![],
+            sort: String::new(),
+            descending: false,
+            offset: 0,
+            keyset: false,
+            cursor: None,
+            limit: 100,
+        })
+        .unwrap()
+        .total,
+        3
+    );
+
     drop(db);
     std::fs::remove_file(path).unwrap();
 }
@@ -252,6 +463,36 @@ fn postgres_live_fixture() {
             .iter()
             .any(|f| f.to.name == "customers")
     );
+    assert_keyset_paging(&mut db, table.clone(), true);
+    assert_keyset_paging(
+        &mut db,
+        TableRef {
+            schema: "public".into(),
+            name: "order_items".into(),
+            kind: "table".into(),
+        },
+        true,
+    );
+    assert_eq!(
+        db.count_rows(&BrowseRequest {
+            filter_groups: vec![],
+            group_mode: "all".into(),
+            connection_id: "fixture".into(),
+            table: table.clone(),
+            filters: vec![],
+            sort: String::new(),
+            descending: false,
+            offset: 0,
+            keyset: false,
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap()
+        .matching,
+        2
+    );
+    db.estimate_rows(&table).unwrap();
+    db.index_advice(&table).unwrap();
     let result = db
         .query(
             "SELECT total,metadata FROM public.orders WHERE id=$1",
@@ -266,6 +507,77 @@ fn postgres_live_fixture() {
         Value::Decimal("99999999999999999.123456789".into())
     );
     assert!(matches!(result.rows[0][1], Value::Json(_)));
+    let enum_metadata = db
+        .metadata(&TableRef {
+            schema: "public".into(),
+            name: "enum_fixture".into(),
+            kind: "table".into(),
+        })
+        .unwrap();
+    let status = enum_metadata
+        .columns
+        .iter()
+        .find(|c| c.name == "status")
+        .unwrap();
+    assert_eq!(
+        status.enum_type,
+        Some(EnumRef {
+            schema: "public".into(),
+            name: "order_status".into()
+        })
+    );
+    assert_eq!(
+        enum_metadata
+            .enums
+            .iter()
+            .find(|e| e.name == "order_status")
+            .unwrap()
+            .values,
+        vec!["pending", "completed", "cancelled"]
+    );
+    let archive = db
+        .metadata(&TableRef {
+            schema: "archive".into(),
+            name: "enum_fixture".into(),
+            kind: "table".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        archive
+            .columns
+            .iter()
+            .find(|c| c.name == "status")
+            .unwrap()
+            .enum_type,
+        Some(EnumRef {
+            schema: "archive".into(),
+            name: "order_status".into()
+        })
+    );
+    assert_eq!(archive.enums[0].values, vec!["queued", "done"]);
+    let partial = db
+        .query(
+            "SELECT generate_series AS n FROM generate_series(1,5000)",
+            &[],
+            100,
+            true,
+            5,
+        )
+        .unwrap();
+    assert_eq!(partial.rows.len(), 100);
+    assert!(partial.truncated);
+    let rejected_write = db.query(
+        "INSERT INTO public.no_identity VALUES ('a'),('b') RETURNING note",
+        &[],
+        1,
+        false,
+        5,
+    );
+    assert_eq!(rejected_write.unwrap_err().code, "RESULT_LIMIT");
+    let unchanged = db
+        .query("SELECT count(*) FROM public.no_identity", &[], 1, true, 5)
+        .unwrap();
+    assert_eq!(unchanged.rows[0][0], Value::Integer("0".into()));
     assert!(db.query("WITH removed AS (DELETE FROM public.orders WHERE id=5822 RETURNING *) SELECT * FROM removed",&[],100,true,5).is_err());
     let result = db
         .query(
@@ -670,6 +982,8 @@ fn grouped_filters_preserve_precedence_scope_and_literal_contains() {
         sort: "".into(),
         descending: false,
         offset: 0,
+        keyset: false,
+        cursor: None,
         limit: 100,
     };
     let ids = |r: ResultSet| {
@@ -696,6 +1010,15 @@ fn grouped_filters_preserve_precedence_scope_and_literal_contains() {
         }],
     }];
     assert_eq!(ids(db.browse(&req).unwrap()), vec!["4"]);
+    let counts = db.count_rows(&req).unwrap();
+    assert_eq!(counts.matching, 1);
+    assert_eq!(counts.total, 4);
+    req.filter_groups[0].filters[0].operator = "startsWith".into();
+    req.filter_groups[0].filters[0].value = Value::Text("100%_".into());
+    assert_eq!(ids(db.browse(&req).unwrap()), vec!["4"]);
+    req.filter_groups[0].filters[0].operator = "endsWith".into();
+    req.filter_groups[0].filters[0].value = Value::Text("literal".into());
+    assert_eq!(ids(db.browse(&req).unwrap()), vec!["4"]);
     req.filter_groups[0].filters[0].operator = "gt".into();
     req.filter_groups[0].filters[0].value = Value::Null;
     assert!(db.browse(&req).is_err());
@@ -707,6 +1030,55 @@ fn grouped_filters_preserve_precedence_scope_and_literal_contains() {
             .rows[0][0]
             .text(),
         Some("4".into())
+    );
+    drop(db);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn million_row_table_stays_page_bounded_and_counts_only_when_requested() {
+    let path = temp_path();
+    let mut db =
+        Database::open(&config(path.to_string_lossy().into()), &temp_path(), false).unwrap();
+    db.query(
+        "CREATE TABLE large_rows(id INTEGER PRIMARY KEY, payload TEXT NOT NULL)",
+        &[],
+        1,
+        false,
+        5,
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    db.query("WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<1000000) INSERT INTO large_rows SELECT n, printf('record-%08d',n) FROM seq", &[], 1, false, 30).unwrap();
+    let insert_ms = started.elapsed().as_millis();
+    let request = BrowseRequest {
+        connection_id: "test".into(),
+        table: TableRef {
+            schema: String::new(),
+            name: "large_rows".into(),
+            kind: "table".into(),
+        },
+        filters: vec![],
+        filter_groups: vec![],
+        group_mode: "all".into(),
+        sort: "".into(),
+        descending: false,
+        offset: 0,
+        keyset: false,
+        cursor: None,
+        limit: 100,
+    };
+    let page = db.browse(&request).unwrap();
+    assert_eq!(page.rows.len(), 100);
+    assert!(page.truncated);
+    let counts = db.count_rows(&request).unwrap();
+    assert_eq!(counts.matching, 1_000_000);
+    assert_eq!(counts.total, 1_000_000);
+    eprintln!(
+        "SQLite performance fixture: 1,000,000 rows inserted in {insert_ms} ms; page returned {} rows in {} ms; explicit counts returned in {} ms",
+        page.rows.len(),
+        page.duration_ms,
+        started.elapsed().as_millis().saturating_sub(insert_ms)
     );
     drop(db);
     let _ = std::fs::remove_file(path);

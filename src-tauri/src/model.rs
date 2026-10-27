@@ -143,6 +143,21 @@ pub struct Column {
     pub nullable: bool,
     pub default_value: Option<String>,
     pub pk: i64,
+    #[serde(default)]
+    pub enum_type: Option<EnumRef>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumRef {
+    pub schema: String,
+    pub name: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnumType {
+    pub schema: String,
+    pub name: String,
+    pub values: Vec<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,11 +177,28 @@ pub struct Index {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct IndexRecommendation {
+    pub table: TableRef,
+    pub related_table: TableRef,
+    pub foreign_key: String,
+    pub columns: Vec<String>,
+    pub direction: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexAdvice {
+    pub recommendations: Vec<IndexRecommendation>,
+    pub truncated: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Metadata {
     pub table: TableRef,
     pub columns: Vec<Column>,
     pub foreign_keys: Vec<ForeignKey>,
     pub indexes: Vec<Index>,
+    #[serde(default)]
+    pub enums: Vec<EnumType>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +209,10 @@ pub struct ResultSet {
     pub affected: u64,
     pub duration_ms: u64,
     pub truncated: bool,
+    #[serde(default)]
+    pub next_cursor: Option<Vec<Value>>,
+    #[serde(default)]
+    pub keyset_supported: bool,
 }
 impl ResultSet {
     pub fn empty() -> Self {
@@ -187,6 +223,8 @@ impl ResultSet {
             affected: 0,
             duration_ms: 0,
             truncated: false,
+            next_cursor: None,
+            keyset_supported: false,
         }
     }
 }
@@ -223,8 +261,24 @@ pub struct BrowseRequest {
     pub descending: bool,
     #[serde(default)]
     pub offset: u32,
+    #[serde(default)]
+    pub keyset: bool,
+    #[serde(default)]
+    pub cursor: Option<Vec<Value>>,
     #[serde(default = "page_size")]
     pub limit: u32,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowCounts {
+    pub matching: u64,
+    pub total: u64,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowEstimate {
+    pub total: Option<u64>,
+    pub source: String,
 }
 fn page_size() -> u32 {
     100

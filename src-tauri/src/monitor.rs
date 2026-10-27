@@ -330,6 +330,8 @@ pub async fn run<R: tauri::Runtime>(
                         sort: String::new(),
                         descending: false,
                         offset: 0,
+                        keyset: false,
+                        cursor: None,
                         limit: 1000,
                     },
                     5,
@@ -602,6 +604,7 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     pk: 1,
+                    enum_type: None,
                 },
                 Column {
                     name: "part".into(),
@@ -609,10 +612,12 @@ mod tests {
                     nullable: false,
                     default_value: None,
                     pk: 2,
+                    enum_type: None,
                 },
             ],
             foreign_keys: vec![],
             indexes: vec![],
+            enums: vec![],
         };
         let missing = result(vec![vec![Value::Integer("1".into())]]);
         match snapshot(&watch, missing, Some(&metadata)) {

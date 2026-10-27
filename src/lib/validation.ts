@@ -57,6 +57,8 @@ const result = z
     affected: z.number(),
     durationMs: z.number(),
     truncated: z.boolean(),
+    nextCursor: z.array(value).nullable(),
+    keysetSupported: z.boolean(),
   })
   .refine(
     (r) => r.rows.every((row) => row.length === r.columns.length),
@@ -71,6 +73,10 @@ const metadata = z.object({
       nullable: z.boolean(),
       defaultValue: z.string().nullable(),
       pk: z.number(),
+      enumType: z
+        .object({ schema: z.string(), name: z.string() })
+        .nullable()
+        .optional(),
     }),
   ),
   foreignKeys: z.array(
@@ -90,6 +96,15 @@ const metadata = z.object({
       columns: z.array(z.string()),
     }),
   ),
+  enums: z
+    .array(
+      z.object({
+        schema: z.string(),
+        name: z.string(),
+        values: z.array(z.string()),
+      }),
+    )
+    .default([]),
 });
 const filterGroup = z.object({
   mode: z.enum(["all", "any"]),
@@ -166,6 +181,10 @@ const tab = z.object({
   filters: z.array(filter).optional(),
   filterGroups: z.array(filterGroup).optional(),
   groupMode: z.enum(["all", "any"]).optional(),
+  offset: z.number().int().min(0).optional(),
+  limit: z.number().int().min(1).max(1000).optional(),
+  sort: z.string().max(512).optional(),
+  descending: z.boolean().optional(),
   root: record.optional(),
   investigation: investigation.optional(),
   watchId: z.string().optional(),
@@ -333,6 +352,26 @@ const schemas: Record<string, z.ZodType> = {
     credentialStorage: z.string(),
   }),
   tables: z.array(table),
+  count_rows: z.object({
+    matching: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+  }),
+  estimate_rows: z.object({
+    total: z.number().int().nonnegative().nullable(),
+    source: z.string(),
+  }),
+  index_advice: z.object({
+    recommendations: z.array(
+      z.object({
+        table,
+        relatedTable: table,
+        foreignKey: z.string(),
+        columns: z.array(z.string()),
+        direction: z.enum(["incoming", "outgoing"]),
+      }),
+    ),
+    truncated: z.boolean(),
+  }),
   schema_table: z.object({
     metadata,
     incoming: z.array(metadata.shape.foreignKeys.element),

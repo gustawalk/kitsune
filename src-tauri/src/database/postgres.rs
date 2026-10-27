@@ -256,9 +256,22 @@ impl Pg {
             let _ = self.command("ROLLBACK");
             return Err(e);
         }
-        let result = self.query_inner(sql, params, limit);
+        let result = self.query_inner(sql, params, limit, read_only);
         match result {
             Ok(r) => {
+                // A bounded partial result is safe only inside Kitsune's own
+                // read-only transaction. Never commit a truncated write/RETURNING.
+                if r.truncated {
+                    if own_transaction {
+                        self.command("ROLLBACK").map_err(|_| {
+                            Error::new(
+                                "CONNECTION_LOST",
+                                "PostgreSQL could not close the limited read transaction.",
+                            )
+                        })?;
+                    }
+                    return Ok(r);
+                }
                 if expected.is_some_and(|n| n != r.affected) {
                     let _ = self.command("ROLLBACK");
                     return Err(Error::new(
@@ -282,6 +295,7 @@ impl Pg {
         sql: &str,
         params: &[Value],
         limit: usize,
+        read_only: bool,
     ) -> Result<ResultSet, Error> {
         let start = Instant::now();
         let sql = c(sql)?;
@@ -398,10 +412,13 @@ impl Pg {
             return Err(e);
         }
         if cancelled {
-            return Err(Error::new(
-                "RESULT_LIMIT",
-                "Result exceeded the row or byte limit. PostgreSQL execution was interrupted and the transaction rolled back. Narrow the query.",
-            ));
+            if !read_only {
+                return Err(Error::new(
+                    "RESULT_LIMIT",
+                    "This statement exceeded the safe result limit. Its transaction was rolled back; narrow the query and run it again.",
+                ));
+            }
+            output.truncated = true;
         }
         output.duration_ms = start.elapsed().as_millis() as u64;
         Ok(output)

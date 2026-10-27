@@ -23,6 +23,7 @@ impl Database {
                 nullable: text(r, 2) == "1",
                 default_value: r.get(3).and_then(Value::text),
                 pk: text(r, 4).parse().unwrap_or(0),
+                enum_type: None,
             })
             .collect();
         let foreign_keys = self.mssql_foreign_keys(t, false)?;
@@ -43,6 +44,7 @@ impl Database {
             columns,
             foreign_keys,
             indexes: indexes.into_values().collect(),
+            enums: vec![],
         })
     }
     pub(super) fn mssql_foreign_keys(

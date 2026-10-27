@@ -8,6 +8,11 @@ CREATE TABLE products(id BIGINT PRIMARY KEY,name TEXT NOT NULL,price NUMERIC(30,
 CREATE TABLE orders(id BIGINT PRIMARY KEY,customer_id BIGINT NOT NULL REFERENCES customers(id),status TEXT NOT NULL DEFAULT 'pending',total NUMERIC(30,9),metadata JSONB,secret_token TEXT,placed_at TIMESTAMPTZ);
 CREATE TABLE order_items(order_id BIGINT REFERENCES orders(id),line_number INTEGER,product_id BIGINT REFERENCES products(id),quantity INTEGER,PRIMARY KEY(order_id,line_number));
 CREATE TABLE payments(id BIGINT PRIMARY KEY,order_id BIGINT REFERENCES orders(id),status TEXT,amount NUMERIC(30,9),receipt BYTEA);
+CREATE TYPE public.order_status AS ENUM('pending','completed','cancelled');
+CREATE SCHEMA archive;
+CREATE TYPE archive.order_status AS ENUM('queued','done');
+CREATE TABLE public.enum_fixture(id INTEGER PRIMARY KEY,status public.order_status);
+CREATE TABLE archive.enum_fixture(id INTEGER PRIMARY KEY,status archive.order_status);
 CREATE TABLE no_identity(note TEXT);
 CREATE TABLE composite_parent(tenant TEXT,code TEXT,label TEXT,PRIMARY KEY(tenant,code));
 CREATE TABLE composite_child(id BIGINT PRIMARY KEY,tenant TEXT,code TEXT,FOREIGN KEY(tenant,code) REFERENCES composite_parent(tenant,code));

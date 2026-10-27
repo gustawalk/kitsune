@@ -250,6 +250,8 @@ impl Database {
                             affected: affected as u64,
                             duration_ms: start.elapsed().as_millis() as u64,
                             truncated: false,
+                            next_cursor: None,
+                            keyset_supported: false,
                         });
                     }
                     let mut rows = statement.query(rusqlite::params_from_iter(values))?;
@@ -260,6 +262,8 @@ impl Database {
                         affected: 0,
                         duration_ms: 0,
                         truncated: false,
+                        next_cursor: None,
+                        keyset_supported: false,
                     };
                     let mut bytes = 0usize;
                     while let Some(row) = rows.next()? {
@@ -268,18 +272,25 @@ impl Database {
                             break;
                         }
                         let mut record = Vec::new();
+                        let mut too_large = false;
                         for col in 0..result.columns.len() {
                             let raw = row.get_ref(col)?;
-                            bytes += match raw {
+                            let value_bytes = match raw {
                                 ValueRef::Blob(v) | ValueRef::Text(v) => v.len(),
                                 _ => 8,
                             };
-                            if bytes > 10 * 1024 * 1024 {
+                            if bytes.saturating_add(value_bytes) > 10 * 1024 * 1024 {
+                                if read_only {
+                                    result.truncated = true;
+                                    too_large = true;
+                                    break;
+                                }
                                 return Err(Error::new(
                                     "RESULT_LIMIT",
-                                    "Result exceeds 10 MiB. Select fewer or smaller values.",
+                                    "This statement exceeded the safe result-size limit. Its transaction was rolled back; select fewer or smaller values and run it again.",
                                 ));
                             }
+                            bytes += value_bytes;
                             record.push(match raw {
                                 ValueRef::Null => Value::Null,
                                 ValueRef::Integer(n) => Value::Integer(n.to_string()),
@@ -296,6 +307,9 @@ impl Database {
                                 ),
                             });
                         }
+                        if too_large {
+                            break;
+                        }
                         result.rows.push(record);
                     }
                     result.duration_ms = start.elapsed().as_millis() as u64;
@@ -304,6 +318,13 @@ impl Database {
                 db.progress_handler(0, None::<fn() -> bool>);
                 match result {
                     Ok(mut value) => {
+                        if value.truncated && !read_only {
+                            let _ = db.execute_batch("ROLLBACK");
+                            return Err(Error::new(
+                                "RESULT_LIMIT",
+                                "This statement exceeded the safe result limit. Its transaction was rolled back; narrow the query and run it again.",
+                            ));
+                        }
                         if writes {
                             value.affected = db.changes();
                         }
@@ -314,9 +335,16 @@ impl Database {
                                 "The selected rows changed or no longer match. No changes from this operation were committed. Refresh and review the selection.",
                             ));
                         }
-                        if own_transaction && let Err(error) = db.execute_batch("COMMIT") {
-                            let _ = db.execute_batch("ROLLBACK");
-                            return Err(error.into());
+                        if own_transaction {
+                            let outcome = if value.truncated {
+                                "ROLLBACK"
+                            } else {
+                                "COMMIT"
+                            };
+                            if let Err(error) = db.execute_batch(outcome) {
+                                let _ = db.execute_batch("ROLLBACK");
+                                return Err(error.into());
+                            }
                         }
                         if writes {
                             value.affected = db.changes();
@@ -423,6 +451,7 @@ impl Database {
                 nullable: text(r, 2) != "1",
                 default_value: r.get(3).and_then(Value::text),
                 pk: text(r, 4).parse().unwrap_or(0),
+                enum_type: None,
             })
             .collect::<Vec<_>>();
         if columns.is_empty() {
@@ -504,6 +533,7 @@ impl Database {
             columns,
             foreign_keys,
             indexes,
+            enums: vec![],
         })
     }
     fn pg_metadata(&mut self, table: &TableRef) -> Result<Metadata, Error> {
@@ -511,7 +541,7 @@ impl Database {
             Value::Text(table.schema.clone()),
             Value::Text(table.name.clone()),
         ];
-        let r=self.query("SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),NOT a.attnotnull,pg_get_expr(d.adbin,d.adrelid),COALESCE(array_position(i.indkey::smallint[],a.attnum)+1,0) FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum LEFT JOIN pg_catalog.pg_index i ON i.indrelid=c.oid AND i.indisprimary WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum",&p,10000,true,30)?;
+        let r=self.query("SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),NOT a.attnotnull,pg_get_expr(d.adbin,d.adrelid),COALESCE(array_position(i.indkey::smallint[],a.attnum)+1,0),CASE WHEN t.typtype='e' THEN tn.nspname END,CASE WHEN t.typtype='e' THEN t.typname END FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum LEFT JOIN pg_catalog.pg_index i ON i.indrelid=c.oid AND i.indisprimary LEFT JOIN pg_catalog.pg_type t ON t.oid=a.atttypid LEFT JOIN pg_catalog.pg_namespace tn ON tn.oid=t.typnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum",&p,10000,true,30)?;
         let columns = r
             .rows
             .iter()
@@ -521,6 +551,11 @@ impl Database {
                 nullable: text(r, 2) == "true",
                 default_value: r.get(3).and_then(Value::text),
                 pk: text(r, 4).parse().unwrap_or(0),
+                enum_type: r
+                    .get(5)
+                    .and_then(Value::text)
+                    .zip(r.get(6).and_then(Value::text))
+                    .map(|(schema, name)| EnumRef { schema, name }),
             })
             .collect::<Vec<_>>();
         if columns.is_empty() {
@@ -553,6 +588,28 @@ impl Database {
             foreign_keys[idx].columns.push(text(&r, 3));
             foreign_keys[idx].target_columns.push(text(&r, 4));
         }
+        let enum_rows=self.query("SELECT DISTINCT tn.nspname,t.typname,e.enumlabel,e.enumsortorder FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_type t ON t.oid=a.atttypid AND t.typtype='e' JOIN pg_catalog.pg_namespace tn ON tn.oid=t.typnamespace JOIN pg_catalog.pg_enum e ON e.enumtypid=t.oid WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY tn.nspname,t.typname,e.enumsortorder",&p,10000,true,30)?;
+        let mut enum_values: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+        for row in enum_rows.rows {
+            enum_values
+                .entry((text(&row, 0), text(&row, 1)))
+                .or_default()
+                .push(text(&row, 2));
+        }
+        if enum_rows.truncated {
+            return Err(Error::new(
+                "METADATA_LIMIT",
+                "Enum metadata exceeds the supported limit.",
+            ));
+        }
+        let enums = enum_values
+            .into_iter()
+            .map(|((schema, name), values)| EnumType {
+                schema,
+                name,
+                values,
+            })
+            .collect();
         let r=self.query("SELECT ic.relname,ix.indisunique,a.attname,ix.indpred IS NOT NULL FROM pg_catalog.pg_index ix JOIN pg_catalog.pg_class c ON c.oid=ix.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ic ON ic.oid=ix.indexrelid CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY k(num,pos) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=c.oid AND a.attnum=k.num WHERE n.nspname=$1 AND c.relname=$2 AND k.pos<=ix.indnkeyatts ORDER BY ic.relname,k.pos",&p,10000,true,30)?;
         let mut indexes: Vec<Index> = vec![];
         for r in r.rows {
@@ -576,6 +633,7 @@ impl Database {
             columns,
             foreign_keys,
             indexes,
+            enums,
         })
     }
     pub fn incoming_foreign_keys(
@@ -799,6 +857,13 @@ impl Database {
         &mut self,
         request: &BrowseRequest,
     ) -> Result<(String, Vec<Value>, u32), Error> {
+        self.browse_statement_mode(request, true)
+    }
+    fn browse_statement_mode(
+        &mut self,
+        request: &BrowseRequest,
+        paginated: bool,
+    ) -> Result<(String, Vec<Value>, u32), Error> {
         let metadata = self.metadata(&request.table)?;
         let pg = matches!(&self.driver, Driver::Postgres(_));
         let mut params = vec![];
@@ -844,6 +909,12 @@ impl Database {
                     "gte" => ">=",
                     "lte" => "<=",
                     "contains" => "LIKE",
+                    "startsWith" => "LIKE",
+                    "endsWith" => "LIKE",
+                    "like" => "LIKE",
+                    "notLike" => "NOT LIKE",
+                    "ilike" if pg => "ILIKE",
+                    "notIlike" if pg => "NOT ILIKE",
                     "null" => "IS NULL",
                     "notNull" => "IS NOT NULL",
                     _ => return Err(Error::new("VALIDATION", "Unsupported filter operator.")),
@@ -862,24 +933,28 @@ impl Database {
                         if f.operator == "ne" { "NOT " } else { "" }
                     ));
                 } else {
-                    let value = if f.operator == "contains" {
-                        Value::Text(format!(
-                            "%{}%",
-                            f.value
+                    let value =
+                        if ["contains", "startsWith", "endsWith"].contains(&f.operator.as_str()) {
+                            let literal = f
+                                .value
                                 .text()
                                 .unwrap_or_default()
                                 .replace('!', "!!")
                                 .replace('%', "!%")
-                                .replace('_', "!_")
-                        ))
-                    } else {
-                        f.value.clone()
-                    };
+                                .replace('_', "!_");
+                            Value::Text(match f.operator.as_str() {
+                                "startsWith" => format!("{literal}%"),
+                                "endsWith" => format!("%{literal}"),
+                                _ => format!("%{literal}%"),
+                            })
+                        } else {
+                            f.value.clone()
+                        };
                     params.push(value);
                     group_parts.push(format!(
                         "{col} {operator} {}{}",
                         placeholder(pg, params.len()),
-                        if f.operator == "contains" {
+                        if ["contains", "startsWith", "endsWith"].contains(&f.operator.as_str()) {
                             " ESCAPE '!'"
                         } else {
                             ""
@@ -911,7 +986,39 @@ impl Database {
             }
         }
         let mut order = Vec::new();
-        if !request.sort.is_empty() {
+        let keyset_keys = identity_columns(&metadata);
+        let keyset_supported = paginated
+            && request.keyset
+            && request.sort.is_empty()
+            && !keyset_keys.is_empty()
+            && keyset_keys.len() <= 16
+            && keyset_keys
+                .iter()
+                .all(|key| cursor_column_supported(&metadata, key));
+        if paginated && request.cursor.is_some() && !keyset_supported {
+            return Err(Error::new(
+                "CURSOR_UNSUPPORTED",
+                "Cursor paging is unavailable for this table or sort. Reset paging and use offset navigation.",
+            ));
+        }
+        if paginated && let Some(cursor) = request.cursor.as_ref() {
+            if cursor.len() != keyset_keys.len()
+                || cursor.iter().any(|value| !cursor_value_supported(value))
+            {
+                return Err(Error::new(
+                    "CURSOR_INVALID",
+                    "The page cursor does not match this table's stable key.",
+                ));
+            }
+            predicates.push(cursor_predicate(
+                &keyset_keys,
+                cursor,
+                request.descending,
+                &mut params,
+                pg,
+            ));
+        }
+        if paginated && !request.sort.is_empty() {
             if !metadata.columns.iter().any(|c| c.name == request.sort) {
                 return Err(Error::new("VALIDATION", "Unknown sort column."));
             }
@@ -921,51 +1028,255 @@ impl Database {
                 if request.descending { "DESC" } else { "ASC" }
             ));
         }
-        for key in identity_columns(&metadata) {
-            if key != request.sort {
-                order.push(quote(&key));
+        for key in &keyset_keys {
+            if key != &request.sort {
+                order.push(if keyset_supported && request.descending {
+                    format!("{} DESC", quote(key))
+                } else {
+                    quote(key)
+                });
             }
         }
         let mut sql = format!("SELECT * FROM {}", qualified(&request.table));
         if !predicates.is_empty() {
             sql.push_str(&format!(" WHERE {}", predicates.join(" AND ")));
         }
-        if !order.is_empty() {
+        if paginated && !order.is_empty() {
             sql.push_str(&format!(" ORDER BY {}", order.join(",")));
         }
         let limit = request.limit.clamp(1, 1001);
-        if self.is_mssql() {
+        if paginated && self.is_mssql() {
             if order.is_empty() {
                 sql.push_str(" ORDER BY (SELECT NULL)");
             }
-            params.push(Value::Integer(request.offset.to_string()));
+            let page_offset = if keyset_supported { 0 } else { request.offset };
+            params.push(Value::Integer(page_offset.to_string()));
             let offset = placeholder(pg, params.len());
             params.push(Value::Integer((limit + 1).to_string()));
             sql.push_str(&format!(
                 " OFFSET {offset} ROWS FETCH NEXT {} ROWS ONLY",
                 placeholder(pg, params.len())
             ));
-        } else {
+        } else if paginated {
             params.push(Value::Integer((limit + 1).to_string()));
             let lim = placeholder(pg, params.len());
-            params.push(Value::Integer(request.offset.to_string()));
-            sql.push_str(&format!(
-                " LIMIT {lim} OFFSET {}",
-                placeholder(pg, params.len())
-            ));
+            sql.push_str(&format!(" LIMIT {lim}"));
+            if !keyset_supported {
+                params.push(Value::Integer(request.offset.to_string()));
+                sql.push_str(&format!(" OFFSET {}", placeholder(pg, params.len())));
+            }
         }
         Ok((sql, params, limit))
+    }
+    fn count_statement(&mut self, request: &BrowseRequest) -> Result<u64, Error> {
+        let (query, params, _) = self.browse_statement_mode(request, false)?;
+        let count = if self.is_mssql() {
+            "COUNT_BIG(*)"
+        } else {
+            "COUNT(*)"
+        };
+        let sql = format!("SELECT {count} FROM ({query}) AS kitsune_count_scope");
+        let result = self.query(&sql, &params, 1, true, 10)?;
+        result
+            .rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::text)
+            .and_then(|count| count.parse::<u64>().ok())
+            .ok_or_else(|| {
+                Error::new(
+                    "COUNT_UNAVAILABLE",
+                    "The database did not return a usable row count.",
+                )
+            })
+    }
+    pub fn count_rows(&mut self, request: &BrowseRequest) -> Result<RowCounts, Error> {
+        let matching = self.count_statement(request)?;
+        let has_filters = !request.filters.is_empty()
+            || request
+                .filter_groups
+                .iter()
+                .any(|group| !group.filters.is_empty());
+        if !has_filters {
+            return Ok(RowCounts {
+                matching,
+                total: matching,
+            });
+        }
+        let mut total_request = request.clone();
+        total_request.filters.clear();
+        total_request.filter_groups.clear();
+        total_request.group_mode = "all".into();
+        let total = self.count_statement(&total_request)?;
+        Ok(RowCounts { matching, total })
+    }
+    pub fn estimate_rows(&mut self, table: &TableRef) -> Result<RowEstimate, Error> {
+        self.metadata(table)?;
+        if table.kind.eq_ignore_ascii_case("view") {
+            return Ok(RowEstimate {
+                total: None,
+                source: "No table statistics are available for views".into(),
+            });
+        }
+        let estimate = if self.is_mssql() {
+            let result = self.query(
+                "SELECT SUM(p.rows) FROM sys.partitions p JOIN sys.tables t ON t.object_id=p.object_id JOIN sys.schemas s ON s.schema_id=t.schema_id WHERE s.name=COALESCE(NULLIF(?1,''),SCHEMA_NAME()) AND t.name=?2 AND p.index_id IN (0,1)",
+                &[
+                    Value::Text(table.schema.clone()),
+                    Value::Text(table.name.clone()),
+                ],
+                1,
+                true,
+                10,
+            )?;
+            (estimated_value(&result), "SQL Server partition statistics")
+        } else if self.is_mysql() {
+            let result = self.query(
+                "SELECT TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA=COALESCE(NULLIF(?1,''),DATABASE()) AND TABLE_NAME=?2 AND TABLE_TYPE='BASE TABLE'",
+                &[
+                    Value::Text(table.schema.clone()),
+                    Value::Text(table.name.clone()),
+                ],
+                1,
+                true,
+                10,
+            )?;
+            (estimated_value(&result), "MySQL/MariaDB table statistics")
+        } else if matches!(&self.driver, Driver::Postgres(_)) {
+            let result = self.query(
+                "SELECT CASE WHEN c.reltuples>=0 THEN c.reltuples::bigint ELSE NULL END FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=COALESCE(NULLIF($1,''),current_schema()) AND c.relname=$2 AND c.relkind IN ('r','p')",
+                &[
+                    Value::Text(table.schema.clone()),
+                    Value::Text(table.name.clone()),
+                ],
+                1,
+                true,
+                10,
+            )?;
+            (estimated_value(&result), "PostgreSQL planner statistics")
+        } else {
+            let stats_exist = self.query(
+                "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='sqlite_stat1'",
+                &[],
+                1,
+                true,
+                10,
+            )?;
+            if stats_exist.rows.is_empty() {
+                return Ok(RowEstimate {
+                    total: None,
+                    source: "Run ANALYZE to collect SQLite row estimates".into(),
+                });
+            }
+            let metadata = self.metadata(table)?;
+            let indexes: Vec<_> = metadata
+                .indexes
+                .iter()
+                .filter(|index| !index.partial)
+                .map(|index| index.name.clone())
+                .collect();
+            if indexes.is_empty() {
+                return Ok(RowEstimate {
+                    total: None,
+                    source: "No full-index SQLite statistics are available".into(),
+                });
+            }
+            let mut params = vec![Value::Text(table.name.clone())];
+            let mut index_placeholders = Vec::with_capacity(indexes.len());
+            for index in indexes {
+                params.push(Value::Text(index));
+                index_placeholders.push(placeholder(false, params.len()));
+            }
+            let sql = format!(
+                "SELECT MAX(CAST(substr(stat,1,instr(stat||' ',' ')-1) AS INTEGER)) FROM sqlite_stat1 WHERE tbl=?1 AND idx IN ({})",
+                index_placeholders.join(",")
+            );
+            let result = self.query(&sql, &params, 1, true, 10)?;
+            (estimated_value(&result), "SQLite ANALYZE statistics")
+        };
+        Ok(RowEstimate {
+            total: estimate.0,
+            source: estimate.1.into(),
+        })
+    }
+    pub fn index_advice(&mut self, table: &TableRef) -> Result<IndexAdvice, Error> {
+        const MAX_RECOMMENDATIONS: usize = 200;
+        let metadata = self.metadata(table)?;
+        let mut recommendations = Vec::new();
+        let mut truncated = false;
+        for foreign_key in &metadata.foreign_keys {
+            if !has_supporting_index(&metadata.indexes, &foreign_key.columns) {
+                recommendations.push(IndexRecommendation {
+                    table: table.clone(),
+                    related_table: foreign_key.to.clone(),
+                    foreign_key: foreign_key.name.clone(),
+                    columns: foreign_key.columns.clone(),
+                    direction: "outgoing".into(),
+                });
+            }
+            if recommendations.len() >= MAX_RECOMMENDATIONS {
+                truncated = true;
+                break;
+            }
+        }
+        if !truncated {
+            let incoming = self.incoming_foreign_keys(table, &metadata)?;
+            for foreign_key in incoming {
+                let child = self.metadata(&foreign_key.from)?;
+                if !has_supporting_index(&child.indexes, &foreign_key.columns) {
+                    recommendations.push(IndexRecommendation {
+                        table: foreign_key.from.clone(),
+                        related_table: table.clone(),
+                        foreign_key: foreign_key.name,
+                        columns: foreign_key.columns,
+                        direction: "incoming".into(),
+                    });
+                }
+                if recommendations.len() >= MAX_RECOMMENDATIONS {
+                    truncated = true;
+                    break;
+                }
+            }
+        }
+        Ok(IndexAdvice {
+            recommendations,
+            truncated,
+        })
     }
     pub fn browse_with_timeout(
         &mut self,
         request: &BrowseRequest,
         timeout: u64,
     ) -> Result<ResultSet, Error> {
+        let metadata = self.metadata(&request.table)?;
+        let keys = identity_columns(&metadata);
+        let keyset_supported = request.keyset
+            && request.sort.is_empty()
+            && !keys.is_empty()
+            && keys.len() <= 16
+            && keys
+                .iter()
+                .all(|key| cursor_column_supported(&metadata, key));
         let (sql, params, limit) = self.browse_statement(request)?;
         let mut r = self.query(&sql, &params, (limit + 1) as usize, true, timeout)?;
         if r.rows.len() > limit as usize {
             r.rows.truncate(limit as usize);
             r.truncated = true;
+        }
+        r.keyset_supported = keyset_supported;
+        if keyset_supported && r.truncated {
+            r.next_cursor = r.rows.last().and_then(|row| {
+                keys.iter()
+                    .map(|key| {
+                        let index = r.columns.iter().position(|column| column == key)?;
+                        let value = row.get(index)?;
+                        cursor_value_supported(value).then(|| value.clone())
+                    })
+                    .collect::<Option<Vec<_>>>()
+            });
+            if r.next_cursor.is_none() {
+                r.keyset_supported = false;
+            }
         }
         Ok(r)
     }
@@ -1060,4 +1371,92 @@ pub fn identity_columns(metadata: &Metadata) -> Vec<String> {
         })
         .map(|i| i.columns.clone())
         .unwrap_or_default()
+}
+fn estimated_value(result: &ResultSet) -> Option<u64> {
+    result
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(Value::text)
+        .and_then(|value| value.parse::<u64>().ok())
+}
+fn has_supporting_index(indexes: &[Index], columns: &[String]) -> bool {
+    !columns.is_empty()
+        && indexes.iter().any(|index| {
+            !index.partial
+                && index.columns.len() >= columns.len()
+                && index.columns.iter().take(columns.len()).eq(columns.iter())
+        })
+}
+fn cursor_column_supported(metadata: &Metadata, name: &str) -> bool {
+    let Some(column) = metadata.columns.iter().find(|column| column.name == name) else {
+        return false;
+    };
+    if column.enum_type.is_some() {
+        return true;
+    }
+    let kind = column.data_type.to_lowercase();
+    kind.is_empty()
+        || [
+            "int",
+            "serial",
+            "numeric",
+            "decimal",
+            "real",
+            "float",
+            "double",
+            "number",
+            "text",
+            "char",
+            "varchar",
+            "nvarchar",
+            "nchar",
+            "string",
+            "uuid",
+            "uniqueidentifier",
+            "date",
+            "time",
+            "bool",
+            "bit",
+            "enum",
+        ]
+        .iter()
+        .any(|supported| kind.contains(supported))
+}
+fn cursor_value_supported(value: &Value) -> bool {
+    matches!(
+        value,
+        Value::Boolean(_)
+            | Value::Integer(_)
+            | Value::Decimal(_)
+            | Value::Float(_)
+            | Value::Text(_)
+            | Value::Date(_)
+            | Value::Timestamp(_)
+            | Value::Uuid(_)
+    )
+}
+fn cursor_predicate(
+    keys: &[String],
+    cursor: &[Value],
+    descending: bool,
+    params: &mut Vec<Value>,
+    postgres: bool,
+) -> String {
+    let comparison = if descending { "<" } else { ">" };
+    let mut disjunctions = Vec::with_capacity(keys.len());
+    for i in 0..keys.len() {
+        let mut conjunctions = Vec::with_capacity(i + 1);
+        for j in 0..=i {
+            params.push(cursor[j].clone());
+            let operator = if i == j { comparison } else { "=" };
+            conjunctions.push(format!(
+                "{} {operator} {}",
+                quote(&keys[j]),
+                placeholder(postgres, params.len())
+            ));
+        }
+        disjunctions.push(format!("({})", conjunctions.join(" AND ")));
+    }
+    format!("({})", disjunctions.join(" OR "))
 }

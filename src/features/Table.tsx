@@ -166,6 +166,8 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             sort,
             descending,
             offset,
+            keyset: false,
+            cursor: null,
             limit,
           }}
           onClose={() => setExporting(false)}

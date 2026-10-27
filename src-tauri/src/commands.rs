@@ -417,6 +417,24 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             let mut db = session.db.lock().map_err(|_| locked())?;
             encode(db.browse(&request)?)
         }
+        "count_rows" => {
+            let request: BrowseRequest = decode(p)?;
+            let session = state.session(&request.connection_id)?;
+            let mut db = session.db.lock().map_err(|_| locked())?;
+            encode(db.count_rows(&request)?)
+        }
+        "estimate_rows" => {
+            let session = state.session(field(&p, "connectionId")?)?;
+            let table: TableRef = decode(p["table"].clone())?;
+            let mut db = session.db.lock().map_err(|_| locked())?;
+            encode(db.estimate_rows(&table)?)
+        }
+        "index_advice" => {
+            let session = state.session(field(&p, "connectionId")?)?;
+            let table: TableRef = decode(p["table"].clone())?;
+            let mut db = session.db.lock().map_err(|_| locked())?;
+            encode(db.index_advice(&table)?)
+        }
         "mysql_statement" => {
             let sql = field(&p, "sql")?;
             let cursor = p["cursor"].as_u64().unwrap_or(0) as usize;
@@ -676,6 +694,13 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             let mut schema_changed = false;
             let mut implicit_commit = false;
             for statement in statements {
+                // This classification only selects a fail-closed database read
+                // path. It is not the safety boundary: SQLite checks
+                // sqlite3_stmt_readonly, PostgreSQL starts BEGIN READ ONLY,
+                // and server adapters apply their own SQL checks.
+                let read_candidate = ["SELECT", "WITH", "VALUES", "EXPLAIN", "SHOW"]
+                    .contains(&crate::safety::first_word(&statement).as_str());
+                let statement_read_only = readonly || read_candidate;
                 let ddl = [
                     "CREATE",
                     "ALTER",
@@ -703,9 +728,9 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                     break;
                 }
                 let outcome = if session.config.driver == "mysql" {
-                    db.mysql_native(&statement, &params, limit, timeout, readonly)
+                    db.mysql_native(&statement, &params, limit, timeout, statement_read_only)
                 } else {
-                    db.query(&statement, &params, limit, readonly, timeout)
+                    db.query(&statement, &params, limit, statement_read_only, timeout)
                         .map(|r| vec![r])
                 };
                 if outcome.is_ok() && ddl {
@@ -830,6 +855,8 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 sort: String::new(),
                 descending: false,
                 offset: 0,
+                keyset: false,
+                cursor: None,
                 limit: 2,
             })?;
             if result.rows.len() > 1 {
@@ -902,6 +929,8 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 sort: String::new(),
                 descending: false,
                 offset: p["offset"].as_u64().unwrap_or(0).min(u32::MAX as u64) as u32,
+                keyset: false,
+                cursor: None,
                 limit: 50,
             })?;
             Ok(json!({"table":table,"metadata":metadata,"result":result}))
@@ -1027,7 +1056,21 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 {
                     if !metadata.columns.iter().any(|c| c.name == filter.column)
                         || ![
-                            "eq", "ne", "gt", "lt", "gte", "lte", "contains", "null", "notNull",
+                            "eq",
+                            "ne",
+                            "gt",
+                            "lt",
+                            "gte",
+                            "lte",
+                            "contains",
+                            "startsWith",
+                            "endsWith",
+                            "like",
+                            "notLike",
+                            "ilike",
+                            "notIlike",
+                            "null",
+                            "notNull",
                         ]
                         .contains(&filter.operator.as_str())
                     {

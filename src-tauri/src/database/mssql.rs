@@ -78,6 +78,8 @@ fn empty() -> ResultSet {
         affected: 0,
         duration_ms: 0,
         truncated: false,
+        next_cursor: None,
+        keyset_supported: false,
     }
 }
 fn driver_error(_: impl std::fmt::Display) -> Error {

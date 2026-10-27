@@ -72,6 +72,7 @@ impl Database {
                 nullable: text(r, 2) == "YES",
                 default_value: r.get(3).and_then(Value::text),
                 pk: text(r, 4).parse().unwrap_or(0),
+                enum_type: None,
             })
             .collect::<Vec<_>>();
         if columns.is_empty() {
@@ -107,6 +108,7 @@ impl Database {
             columns,
             foreign_keys,
             indexes: indexes.into_values().collect(),
+            enums: vec![],
         })
     }
     pub(super) fn mysql_foreign_keys(

@@ -29,6 +29,16 @@ export interface Column {
   nullable: boolean;
   defaultValue: string | null;
   pk: number;
+  enumType: EnumRef | null;
+}
+export interface EnumRef {
+  schema: string;
+  name: string;
+}
+export interface EnumType {
+  schema: string;
+  name: string;
+  values: Array<string>;
 }
 export interface ForeignKey {
   name: string;
@@ -43,11 +53,23 @@ export interface Index {
   unique: boolean;
   columns: Array<string>;
 }
+export interface IndexRecommendation {
+  table: TableRef;
+  relatedTable: TableRef;
+  foreignKey: string;
+  columns: Array<string>;
+  direction: string;
+}
+export interface IndexAdvice {
+  recommendations: Array<IndexRecommendation>;
+  truncated: boolean;
+}
 export interface Metadata {
   table: TableRef;
   columns: Array<Column>;
   foreignKeys: Array<ForeignKey>;
   indexes: Array<Index>;
+  enums: Array<EnumType>;
 }
 export interface ResultSet {
   columns: Array<string>;
@@ -56,6 +78,8 @@ export interface ResultSet {
   affected: number;
   durationMs: number;
   truncated: boolean;
+  nextCursor: Array<Value> | null;
+  keysetSupported: boolean;
 }
 export interface Filter {
   column: string;
@@ -75,7 +99,17 @@ export interface BrowseRequest {
   sort: string;
   descending: boolean;
   offset: number;
+  keyset: boolean;
+  cursor: Array<Value> | null;
   limit: number;
+}
+export interface RowCounts {
+  matching: number;
+  total: number;
+}
+export interface RowEstimate {
+  total: number | null;
+  source: string;
 }
 export interface RecordRef {
   connectionId: string;

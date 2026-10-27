@@ -400,7 +400,7 @@ fn emit_contract_fixture() {
     .unwrap();
     let restore_outcome=call(&app,"commit_restore",json!({"connectionId":"test","token":restore_preview["token"],"operationId":"contract-restore"})).unwrap();
     let diagnostic=call(&app,"diagnose_query",json!({"connectionId":"test","sql":"SELECT * FROM products WHERE id=?1","params":[{"kind":"integer","value":"100"}],"mode":"estimate","operationId":"contract-plan"})).unwrap();
-    let samples = json!({"sql_completion":call(&app,"sql_completion",json!({"connectionId":"test","tables":[record()["table"]]})).unwrap(),"restore_eligibility":call(&app,"restore_eligibility",json!({"eventId":"restore-contract"})).unwrap(),"diagnose_query":diagnostic,"preview_restore":restore_preview,"commit_restore":restore_outcome,"restore_receipt":call(&app,"restore_receipt",json!({"eventId":"restore-contract"})).unwrap(),"preview_table_mutation":mutation_review,"commit_table_mutation":mutation_result,"save_appearance":appearance,"update_cell":call(&app,"update_cell",json!({"record":record(),"column":"status","before":{"kind":"text","value":"pending"},"value":{"kind":"text","value":"confirmed"},"confirmed":true})).unwrap(),"bootstrap":call(&app,"bootstrap",json!({})).unwrap(),"tables":call(&app,"tables",json!({"connectionId":"test"})).unwrap(),"metadata":call(&app,"metadata",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"browse":call(&app,"browse",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"record":call(&app,"record",record()).unwrap(),"watches":call(&app,"watches",json!({})).unwrap(),"events":call(&app,"events",json!({})).unwrap(),"execute":call(&app,"execute",json!({"connectionId":"test","sql":"SELECT 1","operationId":"contract"})).unwrap(),"record_sql":call(&app,"record_sql",record()).unwrap(),"schema_table":call(&app,"schema_table",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"schema_batch":call(&app,"schema_batch",json!({"connectionId":"test","operationId":"contract-schema","tables":[record()["table"],{"schema":"","name":"missing","kind":"table"}]})).unwrap(),"completion":call(&app,"completion",json!({"connectionId":"test","tables":[record()["table"]]})).unwrap()});
+    let samples = json!({"sql_completion":call(&app,"sql_completion",json!({"connectionId":"test","tables":[record()["table"]]})).unwrap(),"restore_eligibility":call(&app,"restore_eligibility",json!({"eventId":"restore-contract"})).unwrap(),"diagnose_query":diagnostic,"preview_restore":restore_preview,"commit_restore":restore_outcome,"restore_receipt":call(&app,"restore_receipt",json!({"eventId":"restore-contract"})).unwrap(),"preview_table_mutation":mutation_review,"commit_table_mutation":mutation_result,"save_appearance":appearance,"update_cell":call(&app,"update_cell",json!({"record":record(),"column":"status","before":{"kind":"text","value":"pending"},"value":{"kind":"text","value":"confirmed"},"confirmed":true})).unwrap(),"bootstrap":call(&app,"bootstrap",json!({})).unwrap(),"tables":call(&app,"tables",json!({"connectionId":"test"})).unwrap(),"metadata":call(&app,"metadata",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"browse":call(&app,"browse",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"estimate_rows":call(&app,"estimate_rows",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"index_advice":call(&app,"index_advice",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"record":call(&app,"record",record()).unwrap(),"watches":call(&app,"watches",json!({})).unwrap(),"events":call(&app,"events",json!({})).unwrap(),"execute":call(&app,"execute",json!({"connectionId":"test","sql":"SELECT 1","operationId":"contract"})).unwrap(),"record_sql":call(&app,"record_sql",record()).unwrap(),"schema_table":call(&app,"schema_table",json!({"connectionId":"test","table":record()["table"]})).unwrap(),"schema_batch":call(&app,"schema_batch",json!({"connectionId":"test","operationId":"contract-schema","tables":[record()["table"],{"schema":"","name":"missing","kind":"table"}]})).unwrap(),"completion":call(&app,"completion",json!({"connectionId":"test","tables":[record()["table"]]})).unwrap()});
     std::fs::write(output, serde_json::to_vec(&samples).unwrap()).unwrap();
     call(&app, "disconnect", json!({"id":"test"})).unwrap();
     drop(external);
@@ -1682,6 +1682,23 @@ async fn network_mysql_workflow(port: u16) {
         Value::Text("kitsune-disposable-network-v1".into()),
         "Refusing to mutate a non-fixture database"
     );
+    let order_table = TableRef {
+        schema: "kitsune_test".into(),
+        name: "orders".into(),
+        kind: "table".into(),
+    };
+    crate::tests::assert_keyset_paging(&mut external, order_table.clone(), true);
+    crate::tests::assert_keyset_paging(
+        &mut external,
+        TableRef {
+            schema: "kitsune_test".into(),
+            name: "order_items".into(),
+            kind: "table".into(),
+        },
+        true,
+    );
+    external.estimate_rows(&order_table).unwrap();
+    external.index_advice(&order_table).unwrap();
     external
         .query(
             "UPDATE orders SET status='pending' WHERE id=5821",
@@ -2150,6 +2167,23 @@ async fn sqlserver_network_workflow_fixture() {
             .rows[0][0],
         Value::Text("kitsune-disposable-network-v1".into())
     );
+    let order_table = TableRef {
+        schema: "dbo".into(),
+        name: "orders".into(),
+        kind: "table".into(),
+    };
+    crate::tests::assert_keyset_paging(&mut external, order_table.clone(), false);
+    crate::tests::assert_keyset_paging(
+        &mut external,
+        TableRef {
+            schema: "dbo".into(),
+            name: "order_items".into(),
+            kind: "table".into(),
+        },
+        false,
+    );
+    external.estimate_rows(&order_table).unwrap();
+    external.index_advice(&order_table).unwrap();
     external
         .query(
             "UPDATE dbo.orders SET status=?1 WHERE id=?2",
