@@ -20,7 +20,12 @@ import {
   Pencil,
   X,
 } from "lucide-react";
-import { display, type DbValue, type ResultSet } from "../lib/types";
+import {
+  display,
+  type DbValue,
+  type ForeignKey,
+  type ResultSet,
+} from "../lib/types";
 import { copyFeedback, Empty } from "./shared";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -36,6 +41,8 @@ interface Props {
   onSelectionChange?: (indices: number[]) => void;
   onEdit?: (row: DbValue[], column: string, value: DbValue) => void;
   onRow?: (row: DbValue[]) => void;
+  foreignKeys?: ForeignKey[];
+  onForeignKey?: (key: ForeignKey, row: DbValue[]) => void;
   selected?: number;
   onSort?: (column: string) => void;
   sort?: string;
@@ -53,6 +60,8 @@ export function DataGrid({
   selectedRows = [],
   onSelectionChange,
   onRow,
+  foreignKeys,
+  onForeignKey,
   onEdit,
   selected,
   onSort,
@@ -558,7 +567,38 @@ export function DataGrid({
                                     })
                               }
                             >
-                              {display(v).slice(0, 240)}
+                              {foreignKeys?.some((fk) =>
+                                fk.columns.includes(result.columns[col]),
+                              ) && onForeignKey ? (
+                                <button
+                                  type="button"
+                                  className="foreign-key-value"
+                                  disabled={v.kind === "null"}
+                                  title="Open the referenced record"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const key = foreignKeys.find((fk) =>
+                                      fk.columns.includes(result.columns[col]),
+                                    );
+                                    if (
+                                      key &&
+                                      key.columns.every((name) => {
+                                        const index =
+                                          result.columns.indexOf(name);
+                                        return (
+                                          index >= 0 &&
+                                          row[index]?.kind !== "null"
+                                        );
+                                      })
+                                    )
+                                      onForeignKey(key, row);
+                                  }}
+                                >
+                                  {display(v).slice(0, 240)}
+                                </button>
+                              ) : (
+                                display(v).slice(0, 240)
+                              )}
                             </div>
                           </ContextMenu.Trigger>
                         </Tooltip>

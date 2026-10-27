@@ -72,6 +72,15 @@ export function openTab(tab: Omit<Tab, "id"> & { id?: string }) {
   if (existing) {
     if (tab.kind === "schema" && tab.schemaTable)
       patchTab(existing.id, { schemaTable: tab.schemaTable });
+    if (tab.kind === "table" && tab.filters)
+      patchTab(existing.id, {
+        filters: tab.filters,
+        filterGroups: tab.filterGroups || [],
+        groupMode: tab.groupMode || "all",
+        offset: tab.offset || 0,
+        sort: tab.sort || "",
+        descending: tab.descending || false,
+      });
     update({
       activeTab: existing.id,
       ...(tab.kind === "schema" ? { inspector: null } : {}),

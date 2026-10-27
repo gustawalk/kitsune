@@ -17,29 +17,35 @@ import {
   Network,
   RefreshCw,
   Table2,
+  Gauge,
   ChevronLeft,
   ChevronRight,
+  Copy,
   X,
 } from "lucide-react";
 import { EditCell } from "../components/EditCell";
 import { notify } from "../lib/store";
 import { DataGrid } from "../components/DataGrid";
 import { Button } from "../components/ui/button";
+import { Dialog } from "../components/ui/dialog";
 import {
   DisconnectedState,
   ErrorState,
   Loading,
   Tag,
 } from "../components/shared";
-import { useRemote } from "../lib/api";
+import { api, errorMessage, useRemote } from "../lib/api";
 import { openTab, patchTab, update, useWorkspace } from "../lib/store";
 import {
   rowKey,
   identityColumns,
   type DbValue,
   type Filter,
+  type IndexAdvice,
   type Metadata,
   type ResultSet,
+  type RowCounts,
+  type RowEstimate,
   type Tab,
 } from "../lib/types";
 export function TableWorkspace({ tab }: { tab: Tab }) {
@@ -57,14 +63,27 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   );
   const writable =
     !!tab.connectionId && workspace.readOnly[tab.connectionId] === false;
-  const [offset, setOffset] = useState(0);
-  const [limit, setLimit] = useState(workspace.settings.pageSize);
-  const [sort, setSort] = useState("");
-  const [descending, setDescending] = useState(false);
+  const [offset, setOffset] = useState(tab.offset || 0);
+  const [cursorPages, setCursorPages] = useState<Array<DbValue[] | null>>([
+    null,
+  ]);
+  const [cursorPage, setCursorPage] = useState(0);
+  const [keysetMode, setKeysetMode] = useState(!tab.offset && !tab.sort);
+  const [limit, setLimit] = useState(tab.limit || workspace.settings.pageSize);
+  const [sort, setSort] = useState(tab.sort || "");
+  const [descending, setDescending] = useState(tab.descending || false);
   const [filters, setFilters] = useState<Filter[]>(tab.filters || []);
-  const [filtering, setFiltering] = useState(false);
+  const [filtering, setFiltering] = useState(true);
   const [filterGroups, setFilterGroups] = useState(tab.filterGroups || []);
   const [groupMode, setGroupMode] = useState(tab.groupMode || "all");
+  const [rowCounts, setRowCounts] = useState<RowCounts>();
+  const [countingRows, setCountingRows] = useState(false);
+  const [rowEstimate, setRowEstimate] = useState<RowEstimate>();
+  const [estimatingRows, setEstimatingRows] = useState(false);
+  const [indexDialogOpen, setIndexDialogOpen] = useState(false);
+  const [indexAdvice, setIndexAdvice] = useState<IndexAdvice>();
+  const [checkingIndexes, setCheckingIndexes] = useState(false);
+  const [indexAdviceError, setIndexAdviceError] = useState("");
   const [selected, setSelected] = useState<DbValue[]>();
   const [selection, setSelection] = useState<{
     result: ResultSet;
@@ -79,11 +98,21 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   const connected = workspace.activeConnections.includes(
     tab.connectionId || "",
   );
+  function resetPaging() {
+    setOffset(0);
+    setCursorPages([null]);
+    setCursorPage(0);
+    setKeysetMode(true);
+  }
   const metadata = useRemote<Metadata>(
     "metadata",
     { connectionId: tab.connectionId, table: tab.table },
-    connected,
+    connected && workspace.activeTab === tab.id,
+    0,
+    true,
   );
+  const keysetRequested = keysetMode && !sort;
+  const pageCursor = keysetRequested ? (cursorPages[cursorPage] ?? null) : null;
   const rows = useRemote<ResultSet>(
     "browse",
     {
@@ -95,9 +124,13 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
       sort,
       descending,
       offset,
+      keyset: keysetRequested,
+      cursor: pageCursor,
       limit,
     },
-    connected && tab.kind === "table",
+    connected && workspace.activeTab === tab.id && tab.kind === "table",
+    0,
+    true,
   );
   const selectedIndices =
     selection?.result === rows.data ? selection?.indices || [] : [];
@@ -115,13 +148,144 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
       metadata: metadata.data,
     });
   }
+  async function countRows() {
+    if (!tab.table || !tab.connectionId || countingRows) return;
+    setCountingRows(true);
+    try {
+      setRowCounts(
+        await api<RowCounts>("count_rows", {
+          connectionId: tab.connectionId,
+          table: tab.table,
+          filters,
+          filterGroups,
+          groupMode,
+        }),
+      );
+    } catch (error) {
+      notify(errorMessage(error), true);
+    } finally {
+      setCountingRows(false);
+    }
+  }
+  async function estimateRows() {
+    if (!tab.table || !tab.connectionId || estimatingRows) return;
+    setEstimatingRows(true);
+    try {
+      const estimate = await api<RowEstimate>("estimate_rows", {
+        connectionId: tab.connectionId,
+        table: tab.table,
+      });
+      setRowEstimate(estimate);
+      if (estimate.total === null)
+        notify(`No quick estimate available. ${estimate.source}.`, true);
+    } catch (error) {
+      notify(errorMessage(error), true);
+    } finally {
+      setEstimatingRows(false);
+    }
+  }
+  async function reviewIndexes() {
+    if (!tab.table || !tab.connectionId || checkingIndexes) return;
+    setIndexDialogOpen(true);
+    setCheckingIndexes(true);
+    setIndexAdviceError("");
+    try {
+      setIndexAdvice(
+        await api<IndexAdvice>("index_advice", {
+          connectionId: tab.connectionId,
+          table: tab.table,
+        }),
+      );
+    } catch (error) {
+      setIndexAdviceError(errorMessage(error));
+    } finally {
+      setCheckingIndexes(false);
+    }
+  }
+  function nextPage() {
+    if (!rows.data?.truncated || rows.loading) return;
+    if (keysetRequested && rows.data.keysetSupported && rows.data.nextCursor) {
+      const nextPageIndex = cursorPage + 1;
+      setCursorPages((pages) => [
+        ...pages.slice(0, nextPageIndex),
+        rows.data!.nextCursor!,
+      ]);
+      setCursorPage(nextPageIndex);
+    } else {
+      setKeysetMode(false);
+    }
+    setOffset((n) => n + limit);
+  }
+  function previousPage() {
+    if (rows.loading) return;
+    if (keysetRequested && cursorPage > 0) {
+      setCursorPage((page) => page - 1);
+    } else {
+      setKeysetMode(false);
+    }
+    setOffset((n) => Math.max(0, n - limit));
+  }
   useEffect(() => {
     setSelection(undefined);
     setSelected(undefined);
   }, [offset, limit, sort, descending, filters, filterGroups, groupMode]);
+  useEffect(() => setRowCounts(undefined), [filters, filterGroups, groupMode]);
   useEffect(() => {
-    patchTab(tab.id, { filters, filterGroups, groupMode });
-  }, [tab.id, filters, filterGroups, groupMode]);
+    if (
+      tab.filters &&
+      JSON.stringify(tab.filters) !== JSON.stringify(filters)
+    ) {
+      setFilters(tab.filters);
+      resetPaging();
+    }
+    if (
+      tab.filterGroups &&
+      JSON.stringify(tab.filterGroups) !== JSON.stringify(filterGroups)
+    ) {
+      setFilterGroups(tab.filterGroups);
+      setGroupMode(tab.groupMode || "all");
+      resetPaging();
+    }
+    if (tab.offset !== undefined && tab.offset !== offset) {
+      setOffset(tab.offset);
+      setCursorPages([null]);
+      setCursorPage(0);
+      setKeysetMode(tab.offset === 0 && !tab.sort);
+    }
+    if (tab.sort !== undefined && tab.sort !== sort) {
+      setSort(tab.sort);
+      resetPaging();
+    }
+    if (tab.descending !== undefined && tab.descending !== descending)
+      setDescending(tab.descending);
+  }, [
+    tab.filters,
+    tab.filterGroups,
+    tab.groupMode,
+    tab.offset,
+    tab.sort,
+    tab.descending,
+  ]);
+  useEffect(() => {
+    patchTab(tab.id, {
+      filters,
+      filterGroups,
+      groupMode,
+      offset,
+      limit,
+      sort,
+      descending,
+    });
+  }, [
+    tab.id,
+    filters,
+    filterGroups,
+    groupMode,
+    offset,
+    limit,
+    sort,
+    descending,
+  ]);
   function record() {
     if (
       !selected ||
@@ -152,6 +316,55 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   if (!tab.table) return null;
   return (
     <div className="workspace-page">
+      <Dialog
+        open={indexDialogOpen}
+        onClose={() => setIndexDialogOpen(false)}
+        title="Relationship index review"
+        description="Read-only check of indexes that begin with foreign-key columns. Kitsune will not create or change indexes."
+        wide
+      >
+        {checkingIndexes ? (
+          <Loading label="Checking relationship indexes…" />
+        ) : indexAdviceError ? (
+          <ErrorState error={indexAdviceError} />
+        ) : indexAdvice?.recommendations.length ? (
+          <div className="index-advice-list">
+            {indexAdvice.recommendations.map((item) => (
+              <div
+                className="notice"
+                key={`${item.direction}:${item.table.schema}:${item.table.name}:${item.foreignKey}`}
+              >
+                <strong>
+                  {item.table.schema ? `${item.table.schema}.` : ""}
+                  {item.table.name}
+                </strong>
+                <span>
+                  {item.direction} relationship to{" "}
+                  {item.relatedTable.schema
+                    ? `${item.relatedTable.schema}.`
+                    : ""}
+                  {item.relatedTable.name} has no supporting index starting with{" "}
+                  {item.columns.join(", ")}.
+                </span>
+              </div>
+            ))}
+            {indexAdvice.truncated && (
+              <p className="muted">
+                Showing the first 200 missing-index recommendations.
+              </p>
+            )}
+            <p className="muted small">
+              Review index candidates against real query plans and write
+              workload before applying them.
+            </p>
+          </div>
+        ) : (
+          <div className="notice">
+            No missing foreign-key index prefixes were found for this table’s
+            incoming or outgoing relationships.
+          </div>
+        )}
+      </Dialog>
       {exporting && metadata.data && (
         <ExportTable
           metadata={metadata.data}
@@ -235,6 +448,18 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           >
             <Download size={13} />
             Export…
+          </Button>
+        )}
+        {tab.kind === "table" && (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={checkingIndexes}
+            onClick={() => void reviewIndexes()}
+            title="Check relationship index coverage without changing the database"
+          >
+            <Gauge size={13} />
+            Index review
           </Button>
         )}
 
@@ -347,12 +572,13 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
       {filtering && metadata.data && (
         <FilterBuilder
           metadata={metadata.data}
+          driver={connection?.driver || "sqlite"}
           groups={filterGroups}
           mode={groupMode}
           onApply={(groups, mode) => {
             setFilterGroups(groups);
             setGroupMode(mode);
-            setOffset(0);
+            resetPaging();
           }}
           preferenceKey={`filters:${tab.connectionId}:${tab.table.schema}:${tab.table.name}`}
         />
@@ -364,7 +590,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               key={i}
               onClick={() => {
                 setFilters((fs) => fs.filter((_, n) => n !== i));
-                setOffset(0);
+                resetPaging();
               }}
             >
               {f.column} {f.operator}{" "}
@@ -405,7 +631,38 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                         {c.pk > 0 && <KeyRound size={12} className="accent" />}{" "}
                         {c.name}
                       </td>
-                      <td className="mono">{c.dataType}</td>
+                      <td className="mono">
+                        {c.dataType}
+                        {c.enumType &&
+                          (() => {
+                            const values = metadata.data!.enums.find(
+                              (item) =>
+                                item.schema === c.enumType!.schema &&
+                                item.name === c.enumType!.name,
+                            )?.values;
+                            return values ? (
+                              <details className="enum-values">
+                                <summary>
+                                  {c.enumType.name} · {values.length} values
+                                </summary>
+                                <div>
+                                  <code>{values.join(", ")}</code>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() =>
+                                      void navigator.clipboard.writeText(
+                                        values.join("\n"),
+                                      )
+                                    }
+                                  >
+                                    <Copy size={12} /> Copy
+                                  </Button>
+                                </div>
+                              </details>
+                            ) : null;
+                          })()}
+                      </td>
                       <td>{c.nullable ? "Yes" : "No"}</td>
                       <td className="mono">{c.defaultValue || "—"}</td>
                     </tr>
@@ -453,6 +710,23 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             rows.data && (
               <DataGrid
                 result={rows.data}
+                foreignKeys={metadata.data?.foreignKeys}
+                onForeignKey={(foreignKey, row) => {
+                  const filters = foreignKey.columns.map((column, index) => ({
+                    column: foreignKey.targetColumns[index],
+                    operator: "eq",
+                    value: row[rows.data!.columns.indexOf(column)],
+                  }));
+                  openTab({
+                    kind: "table",
+                    title: foreignKey.to.name,
+                    connectionId: tab.connectionId,
+                    table: foreignKey.to,
+                    filters,
+                    filterGroups: [],
+                    groupMode: "all",
+                  });
+                }}
                 onVisibleColumns={setVisibleColumns}
                 preferenceKey={`grid:${tab.connectionId}:${tab.table.schema}:${tab.table.name}`}
                 onInvestigate={
@@ -623,7 +897,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                 onSort={(c) => {
                   setDescending(sort === c ? !descending : false);
                   setSort(c);
-                  setOffset(0);
+                  resetPaging();
                 }}
                 sort={sort}
                 descending={descending}
@@ -635,19 +909,46 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               {rows.loading
                 ? "Refreshing…"
                 : rows.data
-                  ? `${rows.data.durationMs} ms · rows ${rows.data.rows.length ? offset + 1 : 0}–${offset + (rows.data.rows.length || 0)}`
+                  ? rowCounts
+                    ? `${rows.data.rows.length.toLocaleString()} displayed / ${rowCounts.matching.toLocaleString()} matching / ${rowCounts.total.toLocaleString()} total rows · exact · ${rows.data.durationMs} ms`
+                    : rowEstimate?.total !== undefined &&
+                        rowEstimate.total !== null
+                      ? `${rows.data.rows.length.toLocaleString()} displayed · ~${rowEstimate.total.toLocaleString()} estimated total rows · ${rows.data.durationMs} ms`
+                      : `${rows.data.rows.length.toLocaleString()} displayed this page · matching and total not counted · ${rows.data.durationMs} ms`
                   : ""}
               {metadata.data &&
                 !identityColumns(metadata.data).length &&
                 " · no reliable unique key; paging may be unstable"}
             </span>
             <div className="spacer" />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!rows.data || estimatingRows || countingRows}
+              onClick={() => void estimateRows()}
+              title="Uses database statistics when available; the estimate may be stale"
+            >
+              {estimatingRows ? "Estimating…" : "Estimate rows"}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={!rows.data || countingRows}
+              onClick={() => void countRows()}
+              title="Runs explicit counts; may take time on large tables"
+            >
+              {countingRows
+                ? "Counting…"
+                : rowCounts
+                  ? "Refresh counts"
+                  : "Count rows"}
+            </Button>
             <Select
               aria-label="Page size"
               value={limit}
               onValueChange={(value) => {
                 setLimit(Number(value));
-                setOffset(0);
+                resetPaging();
               }}
             >
               {[25, 50, 100, 250, 500, 1000].map((n) => (
@@ -659,8 +960,11 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             <Button
               size="icon"
               variant="ghost"
-              disabled={offset === 0 || rows.loading}
-              onClick={() => setOffset((n) => Math.max(0, n - limit))}
+              disabled={
+                (keysetRequested ? cursorPage === 0 : offset === 0) ||
+                rows.loading
+              }
+              onClick={previousPage}
               aria-label="Previous page"
             >
               <ChevronLeft size={16} />
@@ -670,7 +974,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               size="icon"
               variant="ghost"
               disabled={!rows.data?.truncated || rows.loading}
-              onClick={() => setOffset((n) => n + limit)}
+              onClick={nextPage}
               aria-label="Next page"
             >
               <ChevronRight size={16} />

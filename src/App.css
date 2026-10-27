@@ -24,6 +24,14 @@
   --green: #72b795;
   --red: #ec817b;
   --edge: #626977;
+  --sql-keyword: #82b9ff;
+  --sql-type: #6ec8c0;
+  --sql-name: #d8dce5;
+  --sql-string: #a7cf83;
+  --sql-number: #f0b36b;
+  --sql-comment: #929aaa;
+  --sql-operator: #e5a66b;
+  --sql-function: #d7a4f2;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   background: var(--bg);
@@ -46,6 +54,14 @@
   --green: #287453;
   --red: #b43832;
   --edge: #9ba2ae;
+  --sql-keyword: #225da8;
+  --sql-type: #087d78;
+  --sql-name: #303746;
+  --sql-string: #3f761d;
+  --sql-number: #98510a;
+  --sql-comment: #686f7d;
+  --sql-operator: #9b4a16;
+  --sql-function: #70439b;
 }
 * {
   box-sizing: border-box;
@@ -982,6 +998,100 @@ kbd {
 .workspace-heading h1 > .tag {
   margin-left: 3px;
 }
+.investigation-list {
+  display: grid;
+  gap: 7px;
+  padding: 0 24px 24px;
+  max-width: 820px;
+}
+.investigation-list-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.investigation-open {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 3px;
+  text-align: left;
+}
+.investigation-open > svg:first-child {
+  color: var(--accent);
+}
+.investigation-open > svg:last-child {
+  margin-left: auto;
+  color: var(--subtle);
+}
+.investigation-open span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.investigation-open small {
+  color: var(--muted);
+}
+.foreign-key-value {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 38%, transparent);
+  text-underline-offset: 2px;
+}
+.foreign-key-value:disabled {
+  color: var(--muted);
+  text-decoration: none;
+}
+.enum-values {
+  position: relative;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+}
+.enum-values summary {
+  width: max-content;
+  color: var(--accent);
+  cursor: pointer;
+  font: 10px var(--font-mono);
+}
+.enum-values > div {
+  position: absolute;
+  z-index: 5;
+  top: 20px;
+  left: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 200px;
+  max-width: 420px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px #0004;
+}
+.enum-values code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.result-limit-note {
+  padding: 8px 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 11px;
+}
 .eyebrow {
   font-size: 10px;
   letter-spacing: 0.35px;
@@ -1543,6 +1653,15 @@ td svg {
   padding: 12px;
   color: var(--muted);
   margin: 8px 0 16px;
+}
+.index-advice-list {
+  display: grid;
+  gap: 8px;
+}
+.index-advice-list .notice {
+  display: grid;
+  gap: 3px;
+  margin: 0;
 }
 .sql-preview {
   background: var(--bg);

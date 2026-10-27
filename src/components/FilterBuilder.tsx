@@ -36,18 +36,27 @@ const presetsSchema = z
   .max(50);
 export function FilterBuilder({
   metadata,
+  driver,
   groups,
   mode,
   onApply,
   preferenceKey,
 }: {
   metadata: Metadata;
+  driver: string;
   groups: FilterGroup[];
   mode: string;
   onApply: (groups: FilterGroup[], mode: string) => void;
   preferenceKey: string;
 }) {
-  const [draft, setDraft] = useState(groups);
+  const emptyCondition = (): Filter => ({
+    column: "",
+    operator: "eq",
+    value: { kind: "text", value: "" },
+  });
+  const [draft, setDraft] = useState<FilterGroup[]>(
+    groups.length ? groups : [{ mode: "all", filters: [emptyCondition()] }],
+  );
   const [join, setJoin] = useState(mode);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
@@ -57,7 +66,9 @@ export function FilterBuilder({
     [],
   );
   useEffect(() => {
-    setDraft(groups);
+    setDraft(
+      groups.length ? groups : [{ mode: "all", filters: [emptyCondition()] }],
+    );
     setJoin(mode);
   }, [groups, mode]);
   function patch(g: number, index: number, change: Partial<Filter>) {
@@ -74,8 +85,44 @@ export function FilterBuilder({
       ),
     );
   }
+  function operatorsFor(columnName: string) {
+    const column = metadata.columns.find((item) => item.name === columnName);
+    const kind = column ? valueKindForColumn(column.dataType) : "text";
+    const operators: [string, string][] = [
+      ["eq", "="],
+      ["ne", "≠"],
+    ];
+    if (["integer", "decimal", "float", "text"].includes(kind)) {
+      operators.push(["gt", ">"], ["gte", "≥"], ["lt", "<"], ["lte", "≤"]);
+    }
+    if (kind === "text") {
+      operators.push(
+        ["contains", "contains"],
+        ["startsWith", "starts with"],
+        ["endsWith", "ends with"],
+        ["like", "LIKE pattern"],
+        ["notLike", "NOT LIKE pattern"],
+      );
+      if (driver === "postgres") {
+        operators.push(
+          ["ilike", "case-insensitive LIKE"],
+          ["notIlike", "case-insensitive NOT LIKE"],
+        );
+      }
+    }
+    operators.push(["null", "is NULL"], ["notNull", "is not NULL"]);
+    return operators;
+  }
   function checked() {
     return draft
+      .map((g) => ({
+        ...g,
+        filters: g.filters.filter((f) =>
+          f.operator === "null" || f.operator === "notNull"
+            ? !!f.column
+            : !!f.column && display(f.value) !== "",
+        ),
+      }))
       .filter((g) => g.filters.length)
       .map((g) => ({
         ...g,
@@ -89,7 +136,15 @@ export function FilterBuilder({
               f.operator === "null" || f.operator === "notNull"
                 ? { kind: "null" as const }
                 : editedValue(
-                    f.operator === "contains"
+                    [
+                      "contains",
+                      "startsWith",
+                      "endsWith",
+                      "like",
+                      "notLike",
+                      "ilike",
+                      "notIlike",
+                    ].includes(f.operator)
                       ? "text"
                       : valueKindForColumn(column.dataType),
                     display(f.value),
@@ -124,7 +179,9 @@ export function FilterBuilder({
           size="sm"
           variant="secondary"
           disabled={draft.length >= 16}
-          onClick={() => setDraft([...draft, { mode: "all", filters: [] }])}
+          onClick={() =>
+            setDraft([...draft, { mode: "all", filters: [emptyCondition()] }])
+          }
         >
           <Plus size={12} />
           Add group
@@ -174,7 +231,11 @@ export function FilterBuilder({
                 aria-label="Filter column"
                 value={f.column}
                 onValueChange={(column) =>
-                  patch(g, i, { column, value: { kind: "text", value: "" } })
+                  patch(g, i, {
+                    column,
+                    operator: "eq",
+                    value: { kind: "text", value: "" },
+                  })
                 }
               >
                 {metadata.columns.map((c) => (
@@ -188,17 +249,7 @@ export function FilterBuilder({
                 value={f.operator}
                 onValueChange={(operator) => patch(g, i, { operator })}
               >
-                {[
-                  ["eq", "="],
-                  ["ne", "≠"],
-                  ["gt", ">"],
-                  ["gte", "≥"],
-                  ["lt", "<"],
-                  ["lte", "≤"],
-                  ["contains", "contains"],
-                  ["null", "is NULL"],
-                  ["notNull", "is not NULL"],
-                ].map(([value, label]) => (
+                {operatorsFor(f.column).map(([value, label]) => (
                   <SelectItem value={value} key={value}>
                     {label}
                   </SelectItem>
