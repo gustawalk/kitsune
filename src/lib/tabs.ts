@@ -5,6 +5,7 @@ export const tabKindLabels: Record<Tab["kind"], string> = {
   structure: "Structure",
   schema: "Schema",
   investigation: "Detective",
+  investigations: "Investigations",
   watches: "Live Watch",
   timeline: "Timeline",
   settings: "Settings",

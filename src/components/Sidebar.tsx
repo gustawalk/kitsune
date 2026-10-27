@@ -533,9 +533,9 @@ export function Sidebar({
           <span>Investigation mode</span>
         </div>
         <button
-          onClick={() => {
-            update({ activeTab: "" });
-          }}
+          onClick={() =>
+            openTab({ kind: "investigations", title: "Investigations" })
+          }
         >
           <Network size={16} />
           Investigations

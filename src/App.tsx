@@ -78,12 +78,18 @@ const SettingsWorkspace = lazy(() =>
 const HistoryWorkspace = lazy(() =>
   import("./features/Settings").then((m) => ({ default: m.HistoryWorkspace })),
 );
+const InvestigationsWorkspace = lazy(() =>
+  import("./features/Investigations").then((m) => ({
+    default: m.InvestigationsWorkspace,
+  })),
+);
 const tabIcons = {
   query: FileCode2,
   table: Table2,
   structure: Table2,
   schema: Database,
   investigation: Network,
+  investigations: Network,
   watches: Eye,
   timeline: History,
   settings: Settings2,
@@ -106,6 +112,20 @@ function App() {
   const [deleting, setDeleting] = useState<Connection>();
   const [writeConfirmation, setWriteConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Mount workspace panels only when first visited. Keep a small recent set
+  // warm so ordinary tab switching is fast without mounting every grid/editor.
+  const [mountedTabs, setMountedTabs] = useState<string[]>(() =>
+    workspace.activeTab ? [workspace.activeTab] : [],
+  );
+  useEffect(() => {
+    if (!workspace.activeTab) return;
+    setMountedTabs((current) =>
+      [
+        ...current.filter((id) => id !== workspace.activeTab),
+        workspace.activeTab,
+      ].slice(-5),
+    );
+  }, [workspace.activeTab]);
   const [sidebarWidth, setSidebarWidth] = useLayoutPreference(
     "panels:sidebar",
     z.number().min(200).max(420),
@@ -492,7 +512,8 @@ function App() {
                   key={tab.id}
                   hidden={tab.id !== workspace.activeTab}
                 >
-                  {tab.kind === "query" ? (
+                  {!mountedTabs.includes(tab.id) ? null : tab.kind ===
+                    "query" ? (
                     <QueryWorkspace tab={tab} />
                   ) : tab.kind === "table" || tab.kind === "structure" ? (
                     <TableWorkspace tab={tab} />
@@ -506,6 +527,8 @@ function App() {
                     <TimelineWorkspace tab={tab} />
                   ) : tab.kind === "settings" ? (
                     <SettingsWorkspace />
+                  ) : tab.kind === "investigations" ? (
+                    <InvestigationsWorkspace />
                   ) : (
                     <HistoryWorkspace />
                   )}

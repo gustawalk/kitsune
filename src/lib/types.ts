@@ -63,6 +63,7 @@ export interface Tab {
     | "structure"
     | "schema"
     | "investigation"
+    | "investigations"
     | "watches"
     | "timeline"
     | "settings"

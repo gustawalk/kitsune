@@ -167,6 +167,7 @@ const tab = z.object({
     "structure",
     "schema",
     "investigation",
+    "investigations",
     "watches",
     "timeline",
     "settings",
