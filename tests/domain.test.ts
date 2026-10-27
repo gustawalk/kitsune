@@ -111,6 +111,39 @@ describe("lossless values and identity", () => {
   });
 });
 describe("external data validation", () => {
+  test("restores workspaces with empty saved selections", () => {
+    const bootstrap = {
+      connections: [],
+      active: [],
+      readOnly: {},
+      watches: [],
+      investigations: [],
+      settings: null,
+      credentialStorage: "operatingSystem",
+    };
+    for (const selection of [null, undefined, "", "saved-id"]) {
+      const workspace = {
+        tabs: [],
+        activeTab: selection,
+        activeConnection: selection,
+      };
+      expect(
+        validateResponse("bootstrap", { ...bootstrap, workspace }),
+      ).toMatchObject({
+        workspace: {
+          tabs: [],
+          activeTab: selection ?? "",
+          activeConnection: selection ?? "",
+        },
+      });
+    }
+    expect(() =>
+      validateResponse("bootstrap", {
+        ...bootstrap,
+        workspace: { activeConnection: 42 },
+      }),
+    ).toThrow();
+  });
   test("rejects invalid drivers and malformed values", () => {
     expect(connectionSchema.safeParse({ driver: "mysql" }).success).toBe(false);
     expect(

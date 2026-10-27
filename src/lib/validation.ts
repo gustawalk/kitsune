@@ -346,8 +346,14 @@ const schemas: Record<string, z.ZodType> = {
     workspace: z
       .object({
         tabs: z.array(tab).optional(),
-        activeTab: z.string().optional(),
-        activeConnection: z.string().optional(),
+        activeTab: z
+          .string()
+          .nullish()
+          .transform((value) => value ?? ""),
+        activeConnection: z
+          .string()
+          .nullish()
+          .transform((value) => value ?? ""),
       })
       .nullable(),
     credentialStorage: z.string(),
