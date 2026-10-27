@@ -9,7 +9,7 @@ import { EditorView, keymap } from "@codemirror/view";
 import { EditorState, Compartment } from "@codemirror/state";
 import {
   syntaxHighlighting,
-  defaultHighlightStyle,
+  HighlightStyle,
   syntaxTree,
 } from "@codemirror/language";
 import {
@@ -19,7 +19,24 @@ import {
 } from "@codemirror/autocomplete";
 import { indentWithTab } from "@codemirror/commands";
 import { basicSetup } from "codemirror";
+import { tags } from "@lezer/highlight";
 import type { Settings, SqlCompletion } from "../lib/types";
+const sqlHighlight = HighlightStyle.define([
+  { tag: tags.keyword, color: "var(--sql-keyword)", fontWeight: "600" },
+  {
+    tag: [tags.typeName, tags.className, tags.namespace],
+    color: "var(--sql-type)",
+  },
+  {
+    tag: [tags.propertyName, tags.variableName, tags.name],
+    color: "var(--sql-name)",
+  },
+  { tag: [tags.string, tags.special(tags.string)], color: "var(--sql-string)" },
+  { tag: [tags.number, tags.bool, tags.null], color: "var(--sql-number)" },
+  { tag: tags.comment, color: "var(--sql-comment)", fontStyle: "italic" },
+  { tag: [tags.operator, tags.punctuation], color: "var(--sql-operator)" },
+  { tag: tags.function(tags.variableName), color: "var(--sql-function)" },
+]);
 export function SqlEditor({
   value,
   dialect,
@@ -87,7 +104,7 @@ export function SqlEditor({
               upperCaseKeywords: true,
             }),
           ),
-          syntaxHighlighting(defaultHighlightStyle),
+          syntaxHighlighting(sqlHighlight),
           keymap.of([
             indentWithTab,
             {
