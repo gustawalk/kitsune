@@ -62,3 +62,4 @@ impl Subscriber for SafeLog {
         );
     }
 }
+pub mod credentials;

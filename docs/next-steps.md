@@ -70,7 +70,7 @@ Full diagrams load on request: at most 200 nodes and 1,000 displayed relationshi
 
 **Priority:** release readiness; parallel planning is possible, implementation should follow platform verification.
 
-- Introduce OS credential-vault storage while preserving the visible session-only fallback and prohibiting plaintext fallback.
+- Expand cross-platform credential-vault build and runtime verification. The current implementation uses native OS credential stores and keeps session-only credentials when vault access is unavailable; plaintext fallback is prohibited.
 - Verify libpq/TLS distribution and native installers on Linux, Windows, and macOS. Review the current `.app` identifier warning before macOS distribution.
 - Add cross-platform CI gates, desktop smoke tests, and dependency/update checks. Publish only after review of actual artifacts and verification evidence.
 

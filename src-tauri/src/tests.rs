@@ -18,6 +18,7 @@ fn config(path: String) -> ConnectionConfig {
         tls_key_path: String::new(),
         read_only: false,
         create: true,
+        remember_password: false,
     }
 }
 fn temp_path() -> std::path::PathBuf {

@@ -28,6 +28,16 @@ fn field<'a>(p: &'a Json, key: &str) -> Result<&'a str, Error> {
 fn locked() -> Error {
     Error::new("STATE", "Application state is unavailable.")
 }
+fn resolve_password(config: &mut ConnectionConfig) -> Result<(), Error> {
+    if config.remember_password && config.password.is_empty() && !config.id.is_empty() {
+        match crate::security::credentials::load(&config.id) {
+            Ok(password) => config.password = password,
+            Err(error) if error.code == "CREDENTIAL_MISSING" => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
 #[tauri::command]
 pub async fn api(app: tauri::AppHandle, method: String, payload: Json) -> Result<Json, Error> {
     if method == "cancel_query" {
@@ -87,7 +97,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 (active, read_only, transactions)
             };
             Ok(
-                json!({"connections":configs,"active":active,"readOnly":read_only,"transactions":transactions,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"session"}),
+                json!({"connections":configs,"active":active,"readOnly":read_only,"transactions":transactions,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"operatingSystem"}),
             )
         }
         "save_connection" => {
@@ -95,6 +105,15 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             config.validate()?;
             if config.id.is_empty() {
                 config.id = uuid::Uuid::new_v4().to_string();
+            }
+            let previously_remembered = state
+                .storage
+                .get::<ConnectionConfig>("connections", &config.id)?
+                .is_some_and(|saved| saved.remember_password);
+            if config.remember_password && !config.password.is_empty() {
+                crate::security::credentials::save(&config.id, &config.password)?;
+            } else if !config.remember_password && previously_remembered {
+                crate::security::credentials::remove(&config.id)?;
             }
             config.password.clear();
             config.create = false;
@@ -104,12 +123,20 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "delete_connection" => {
             let id = field(&p, "id")?;
+            if state
+                .storage
+                .get::<ConnectionConfig>("connections", id)?
+                .is_some_and(|saved| saved.remember_password)
+            {
+                crate::security::credentials::remove(id)?;
+            }
             state.stop_connection(id);
             state.storage.delete("connections", id)?;
             Ok(Json::Null)
         }
         "test_connection" => {
-            let config: ConnectionConfig = decode(p)?;
+            let mut config: ConnectionConfig = decode(p)?;
+            resolve_password(&mut config)?;
             if config.create {
                 return Err(Error::new(
                     "VALIDATION",
@@ -121,11 +148,22 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "connect" => {
             let mut config: ConnectionConfig = decode(p)?;
+            resolve_password(&mut config)?;
             config.validate()?;
+            let previously_remembered = !config.id.is_empty()
+                && state
+                    .storage
+                    .get::<ConnectionConfig>("connections", &config.id)?
+                    .is_some_and(|saved| saved.remember_password);
             if config.id.is_empty() {
                 config.id = uuid::Uuid::new_v4().to_string();
             }
             let db = Database::open(&config, &state.internal, false)?;
+            if config.remember_password {
+                crate::security::credentials::save(&config.id, &config.password)?;
+            } else if previously_remembered {
+                crate::security::credentials::remove(&config.id)?;
+            }
             let mut monitor_config = config.clone();
             monitor_config.create = false;
             let monitor = Database::open(&monitor_config, &state.internal, true)?;

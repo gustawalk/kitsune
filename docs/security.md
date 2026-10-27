@@ -4,7 +4,7 @@ Kitsune is a local desktop application handling potentially sensitive databases.
 
 ## Credentials and local data
 
-Passwords are session-only. The saved-connection serializer excludes the password field. No OS credential-vault persistence is implemented and there is no plaintext fallback. Passwords remain in Rust session memory until disconnect/drop; memory is not explicitly zeroized and crash dumps are outside the application's protection.
+Passwords are session-only by default. The saved-connection serializer excludes the password field. When **Remember password securely** is enabled, Rust stores/retrieves the password through the native credential store: Secret Service on Linux, Windows Credential Manager, and macOS Keychain. An unavailable or locked store returns an error; there is no plaintext fallback. Remembered passwords are never returned by bootstrap or exposed to general frontend state. Passwords remain in Rust session memory until disconnect/drop; memory is not explicitly zeroized and crash dumps are outside the application's protection. Turning the option off removes the associated credential; deleting a remembered connection removes it before deleting the saved settings.
 
 The frontend has no SQL plugin, shell permission, general filesystem permission, or direct database driver. Tauri exposes application operations under a restrictive CSP and minimal capabilities. Rust's PostgreSQL library loader uses fixed library names and documented macOS locations.
 
@@ -50,7 +50,7 @@ Export chooses a bounded scope and explicit columns. Name-based secret detection
 
 ## MySQL/MariaDB
 
-The Rust worker owns credentials and transport. Driver errors are redacted into stable categories. Rustls verify-full enforces CA and hostname checks; require explicitly provides encryption without verification. TLS failures never trigger a downgrade. Passwords remain session-only.
+The Rust worker owns credentials and transport. Driver errors are redacted into stable categories. Rustls verify-full enforces CA and hostname checks; require explicitly provides encryption without verification. TLS failures never trigger a downgrade. Passwords remain session-only unless the user explicitly opts into OS credential storage.
 
 Generated reads use server read-only transactions; native read-only sessions also use server read-only defaults and AST checks. Managed edits require InnoDB and reject visible triggers. Historical restore additionally rejects cascading/SET NULL incoming relationships and checks captured data under locks. Grants may hide trigger metadata; privileged functions can have external effects. This is not a general SQL sandbox. Native reviewed DDL/routines/multi-table writes are available and can commit implicitly. Native SQL tabs own isolated connections; closing a transaction requires confirmation. KILL QUERY is requested on cancellation/timeout before discarding the connection; UI does not claim server-confirmed cancellation. Never automatically repeat a write after an uncertain outcome.
 

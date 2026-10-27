@@ -138,6 +138,7 @@ export const emptyConnection = (): Connection => ({
   path: "",
   readOnly: false,
   create: false,
+  rememberPassword: false,
 });
 export function display(v: DbValue | undefined | null): string {
   if (!v) return "Not captured";

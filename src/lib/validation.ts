@@ -47,6 +47,7 @@ const connection = z.object({
   path: z.string(),
   readOnly: z.boolean(),
   create: z.boolean(),
+  rememberPassword: z.boolean().default(false),
 });
 const result = z
   .object({

@@ -44,7 +44,7 @@ macOS packaging is not verified. See [build and installation details](docs/deskt
 
 ## Start investigating
 
-1. Add a connection. Use the file picker for SQLite, or enter server settings. Test and connect. Passwords are session-only; saved settings never contain them.
+1. Add a connection. Use the file picker for SQLite, or enter server settings. Test and connect. Passwords are session-only by default; **Remember password securely** stores them in the OS credential manager only.
 2. Search the sidebar and open a table. Select a record to inspect it, edit a supported cell, or choose **Investigate**.
 3. Expand a declared relationship in Detective. Start a watch on the selected record.
 4. Change the record from your application or another client. Open **Live Watch** and **Time Machine** to inspect the captured fields and observation timestamps.
@@ -80,7 +80,7 @@ Production connections start read-only. Enabling writes requires an explicit ses
 
 MySQL/MariaDB connections default to **verify-full**: certificate chain and hostname validation, system/public trust roots, or an explicitly selected custom CA. A custom CA replaces default trust roots. Client certificate/key files can also be selected. **require** means encryption without certificate verification; existing saved choices are preserved. There is no silent TLS downgrade.
 
-Passwords are not persisted. Credential-vault integration is not implemented. Metadata, SQL history, and captured values remain local and are **not encrypted at rest**; SQL text and record references may themselves be sensitive. History can be disabled or cleared. Production watches default to metadata-only capture. Column exclusions help reduce capture but cannot discover every secret embedded in text or JSON.
+Passwords are not written to Kitsune metadata. If remembered, they live in the OS credential manager (Secret Service on Linux, Credential Manager on Windows, Keychain on macOS). If that store is unavailable or locked, Kitsune reports the failure and never falls back to plaintext. Metadata, SQL history, and captured values remain local and are **not encrypted at rest**; SQL text and record references may themselves be sensitive. History can be disabled or cleared. Production watches default to metadata-only capture. Column exclusions help reduce capture but cannot discover every secret embedded in text or JSON.
 
 Cancellation closes interrupted transports where necessary and does not promise server-confirmed cancellation. Never automatically retry a write whose outcome is uncertain. Restore previews are not backups; they recheck current data and schema and can refuse unsafe operations. Read [security boundaries](docs/security.md) before connecting to sensitive systems.
 

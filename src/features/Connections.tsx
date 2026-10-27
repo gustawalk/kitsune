@@ -83,10 +83,14 @@ export function ConnectionDialog({
         setTested(true);
         notify("Connection test succeeded");
       } else if (kind === "save") {
-        await api("save_connection", config);
+        await api("save_connection", payload);
         await refreshConnections();
         onClose();
-        notify("Connection saved. Credentials are requested each session.");
+        notify(
+          config.rememberPassword
+            ? "Connection and password saved securely"
+            : "Connection saved. Password is requested when connecting.",
+        );
       } else {
         const result = await api<{
           id: string;
@@ -296,7 +300,14 @@ export function ConnectionDialog({
                       autoComplete="username"
                     />
                   </Field>
-                  <Field label="Password" hint="Session only · never persisted">
+                  <Field
+                    label="Password"
+                    hint={
+                      config.rememberPassword
+                        ? "Stored in your operating-system credential manager"
+                        : "Session only · never persisted"
+                    }
+                  >
                     <input
                       type="password"
                       value={password}
@@ -304,6 +315,15 @@ export function ConnectionDialog({
                       autoComplete="current-password"
                     />
                   </Field>
+                  <label className="check-row full">
+                    <Checkbox
+                      checked={config.rememberPassword}
+                      onCheckedChange={(checked) =>
+                        patch({ rememberPassword: checked })
+                      }
+                    />
+                    Remember password securely
+                  </label>
                   <Field
                     label="TLS mode"
                     hint="require encrypts traffic; verify-full also validates server identity. Use require only for trusted endpoints."

@@ -68,6 +68,8 @@ pub struct ConnectionConfig {
     pub read_only: bool,
     #[serde(default)]
     pub create: bool,
+    #[serde(default)]
+    pub remember_password: bool,
 }
 fn port() -> u16 {
     5432
