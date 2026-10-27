@@ -486,7 +486,9 @@ export function DetectiveWorkspace({ tab }: { tab: Tab }) {
           <h1>
             <Network size={20} />
             {name || root.table.name}
-            <Tag>{graph.nodes.length} records</Tag>
+            <Tag>
+              {graph.nodes.length} record{graph.nodes.length === 1 ? "" : "s"}
+            </Tag>
           </h1>
         </div>
         <div className="spacer" />
