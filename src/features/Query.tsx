@@ -3,13 +3,7 @@ import { QueryDiagnostics } from "../components/QueryDiagnostics";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
 import { modKey } from "../lib/utils";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  useDeferredValue,
-} from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import type { EditorView } from "@codemirror/view";
 import {
   Activity,
@@ -65,6 +59,10 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   const [queryName, setQueryName] = useState("");
   const [saveBusy, setSaveBusy] = useState(false);
   const editor = useRef<EditorView | null>(null);
+  const draftSql = useRef(tab.sql || "");
+  const persistTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const preparing = useRef(false);
   const operation = useRef("");
   const pending = useRef("");
@@ -73,19 +71,74 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   const connected = workspace.activeConnections.includes(
     tab.connectionId || "",
   );
-  const deferredSql = useDeferredValue(tab.sql || "");
+  const currentSql = () =>
+    editor.current?.state.doc.toString() ?? draftSql.current;
+  useEffect(() => {
+    if (!editor.current && draftSql.current !== (tab.sql || ""))
+      draftSql.current = tab.sql || "";
+  }, [tab.sql]);
+  useEffect(
+    () => () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+      const sql = currentSql();
+      if (sql !== (getWorkspace().tabs.find((t) => t.id === tab.id)?.sql || ""))
+        patchTab(tab.id, { sql });
+    },
+    [tab.id],
+  );
+  const [completionSql, setCompletionSql] = useState(tab.sql || "");
+  useEffect(() => {
+    const timer = setTimeout(() => setCompletionSql(tab.sql || ""), 650);
+    return () => clearTimeout(timer);
+  }, [tab.sql]);
   const tables = useRemote<TableRef[]>(
     "tables",
     { connectionId: tab.connectionId },
-    connected,
+    connected && workspace.activeTab === tab.id,
   );
-  const referenced = (tables.data || [])
-    .filter((t) => deferredSql.toLowerCase().includes(t.name.toLowerCase()))
-    .slice(0, 5);
+  const indexedTables = useMemo(
+    () =>
+      (tables.data || []).map((table) => ({
+        table,
+        lowerName: table.name.toLowerCase(),
+      })),
+    [tables.data],
+  );
+  const referenced = useMemo(() => {
+    const lowerSql = completionSql.toLowerCase();
+    return indexedTables
+      .filter(({ lowerName }) => lowerSql.includes(lowerName))
+      .slice(0, 5)
+      .map(({ table }) => table);
+  }, [completionSql, indexedTables]);
   const columns = useRemote<SqlCompletion[]>(
     "sql_completion",
     { connectionId: tab.connectionId, tables: referenced },
-    connected && referenced.length > 0,
+    connected && workspace.activeTab === tab.id && referenced.length > 0,
+  );
+  const suggestions = useMemo(
+    () => [
+      ...(tables.data || []).flatMap((t) => [
+        {
+          label: t.name,
+          parts: [t.name],
+          kind: "table",
+          detail: t.schema || "table",
+        },
+        ...(t.schema
+          ? [
+              {
+                label: `${t.schema}.${t.name}`,
+                parts: [t.schema, t.name],
+                kind: "table",
+                detail: "qualified table",
+              },
+            ]
+          : []),
+      ]),
+      ...(columns.data || []),
+    ],
+    [tables.data, columns.data],
   );
   const execute = useCallback(
     async (confirmed = false, exactSql?: string) => {
@@ -107,15 +160,15 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           (view && selection && !selection.empty
             ? view.state.sliceDoc(selection.from, selection.to)
             : script
-              ? currentTab.sql || ""
+              ? currentSql()
               : dialect === "mysql"
                 ? (
                     await api<{ sql: string }>("mysql_statement", {
-                      sql: currentTab.sql || "",
+                      sql: currentSql(),
                       cursor: selection?.head || 0,
                     })
                   ).sql
-                : currentStatement(currentTab.sql || "", selection?.head || 0));
+                : currentStatement(currentSql(), selection?.head || 0));
       } catch (e) {
         preparing.current = false;
         setError(errorMessage(e));
@@ -238,8 +291,9 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
   async function save() {
     setSaveBusy(true);
     try {
-      await api("save_query", { name: queryName, sql: tab.sql || "" });
-      patchTab(tab.id, { title: queryName, savedSql: tab.sql });
+      const sql = currentSql();
+      await api("save_query", { name: queryName, sql });
+      patchTab(tab.id, { sql, title: queryName, savedSql: sql });
       setSaving(false);
       notify("Query saved locally");
     } catch (e) {
@@ -375,7 +429,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
             setPortableSource(
               view && selection && !selection.empty
                 ? view.state.sliceDoc(selection.from, selection.to)
-                : tab.sql || "",
+                : currentSql(),
             );
           }}
         >
@@ -395,7 +449,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           variant="ghost"
           size="icon"
           title="Copy SQL"
-          onClick={() => void copyFeedback(tab.sql || "")}
+          onClick={() => void copyFeedback(currentSql())}
         >
           <Copy size={15} />
         </Button>
@@ -415,7 +469,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
         ) : (
           <Button
             size="sm"
-            disabled={!connected || !tab.sql?.trim()}
+            disabled={!connected || !currentSql().trim()}
             onClick={() => void execute()}
           >
             <Play size={13} />
@@ -487,29 +541,19 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
         <SqlEditor
           dialect={dialect}
           value={tab.sql || ""}
-          onChange={(sql) => patchTab(tab.id, { sql })}
+          onChange={(sql) => {
+            draftSql.current = sql;
+            if (persistTimer.current) clearTimeout(persistTimer.current);
+            persistTimer.current = setTimeout(() => {
+              if (
+                sql !==
+                (getWorkspace().tabs.find((t) => t.id === tab.id)?.sql || "")
+              )
+                patchTab(tab.id, { sql });
+            }, 500);
+          }}
           editorRef={editor}
-          suggestions={[
-            ...(tables.data?.flatMap((t) => [
-              {
-                label: t.name,
-                parts: [t.name],
-                kind: "table",
-                detail: t.schema || "table",
-              },
-              ...(t.schema
-                ? [
-                    {
-                      label: `${t.schema}.${t.name}`,
-                      parts: [t.schema, t.name],
-                      kind: "table",
-                      detail: "qualified table",
-                    },
-                  ]
-                : []),
-            ]) || []),
-            ...(columns.data || []),
-          ]}
+          suggestions={suggestions}
           settings={workspace.settings}
         />
       </div>
@@ -596,7 +640,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
             const sql =
               view && selection && !selection.empty
                 ? view.state.sliceDoc(selection.from, selection.to)
-                : currentStatement(tab.sql || "", selection?.head || 0);
+                : currentStatement(currentSql(), selection?.head || 0);
             if (!sql.trim()) {
               setError("Enter or select a query to diagnose.");
               return;
@@ -620,10 +664,19 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
       {execution?.warning && <ErrorState error={execution.warning} />}
       <div className="results-body">
         {execution?.results[resultIndex] ? (
-          <DataGrid
-            result={execution.results[resultIndex]}
-            density={workspace.settings.density}
-          />
+          <>
+            {execution.results[resultIndex].truncated && (
+              <div className="result-limit-note" role="status">
+                Partial read-only result: Kitsune stopped fetching at its safety
+                limit and rolled back its read transaction. Narrow the query or
+                add an explicit filter before running it again.
+              </div>
+            )}
+            <DataGrid
+              result={execution.results[resultIndex]}
+              density={workspace.settings.density}
+            />
+          </>
         ) : (
           <Empty
             icon={<Terminal size={25} />}

@@ -32,3 +32,22 @@ export function finishDiagramGesture(
     ? gesture.nodeId
     : undefined;
 }
+
+export function zoomDiagramAtPoint(
+  zoom: number,
+  pan: { x: number; y: number },
+  cursor: { x: number; y: number },
+  deltaY: number,
+) {
+  const nextZoom = Math.max(
+    0.015,
+    Math.min(1.8, zoom * Math.exp(-deltaY * 0.001)),
+  );
+  return {
+    zoom: nextZoom,
+    pan: {
+      x: cursor.x - ((cursor.x - pan.x) / zoom) * nextZoom,
+      y: cursor.y - ((cursor.y - pan.y) / zoom) * nextZoom,
+    },
+  };
+}

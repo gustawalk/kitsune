@@ -4,9 +4,10 @@ import { Tooltip } from "./ui/tooltip";
 import {
   moveDiagramGesture,
   finishDiagramGesture,
+  zoomDiagramAtPoint,
   type DiagramGesture,
 } from "../lib/diagram-gesture";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Focus,
   LocateFixed,
@@ -19,6 +20,77 @@ import {
 import type { SchemaGraph, SchemaNode } from "../lib/schema";
 import { schemaViewport, tableKey } from "../lib/schema";
 import type { TableRef } from "../lib/types";
+const SchemaNodeCard = memo(function SchemaNodeCard({
+  node,
+  selected,
+  manual,
+  onSelect,
+}: {
+  node: SchemaNode;
+  selected: boolean;
+  manual: React.MutableRefObject<boolean>;
+  onSelect: (table: TableRef) => void;
+}) {
+  const inspect = (event: React.MouseEvent) => {
+    if (event.detail === 0) {
+      manual.current = true;
+      onSelect(node.table);
+    }
+  };
+  return (
+    <section
+      className={`schema-node ${selected ? "selected" : ""} ${node.external ? "external" : ""}`}
+      style={{
+        left: node.x,
+        top: node.y,
+        width: node.width,
+        height: node.height,
+      }}
+      data-schema-node={node.id}
+    >
+      <header>
+        <Table2 size={14} />
+        <Tooltip
+          content={`Click to inspect ${[node.table.schema, node.table.name].filter(Boolean).join(".")} · Drag to move`}
+        >
+          <button type="button" aria-pressed={selected} onClick={inspect}>
+            {node.table.name}
+          </button>
+        </Tooltip>
+        <small>{node.table.kind}</small>
+      </header>
+      {node.external ? (
+        <p className="schema-external-label">Metadata not loaded</p>
+      ) : (
+        <div>
+          {node.metadata!.columns.slice(0, 6).map((column) => (
+            <div className="schema-node-column" key={column.name}>
+              <span className={column.pk ? "accent" : "subtle"}>
+                {column.pk ? <KeyRound size={10} /> : "·"}
+              </span>
+              <Tooltip content={column.name}>
+                <span>{column.name}</span>
+              </Tooltip>
+              <Tooltip content={column.dataType}>
+                <code>{column.dataType}</code>
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      )}
+      <footer>
+        <span>{node.table.schema || "SQLite"}</span>
+        {node.metadata && node.metadata.columns.length > 6 ? (
+          <button onClick={inspect}>
+            +{node.metadata.columns.length - 6} columns
+          </button>
+        ) : (
+          <span>{node.metadata?.columns.length ?? "—"} columns</span>
+        )}
+      </footer>
+    </section>
+  );
+});
 export function SchemaDiagram({
   graph,
   preferenceKey,
@@ -46,7 +118,13 @@ export function SchemaDiagram({
   const manual = useRef(false);
   const gesture = useRef<DiagramGesture | null>(null);
   const nodes = useMemo(
-    () => graph.nodes.map((n) => ({ ...n, ...positions[n.id] })),
+    () =>
+      graph.nodes.map((node) => {
+        const position = positions[node.id];
+        return position && (position.x !== node.x || position.y !== node.y)
+          ? { ...node, ...position }
+          : node;
+      }),
     [graph.nodes, positions],
   );
   const nodeMap = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
@@ -148,6 +226,43 @@ export function SchemaDiagram({
       y: node.y + (index >= 0 ? 49 + Math.min(index, 5) * 22 : 42),
     };
   }
+  const edgeElements = useMemo(
+    () =>
+      graph.edges.map((edge) => {
+        const from = nodeMap.get(edge.from),
+          to = nodeMap.get(edge.to);
+        if (!from || !to) return null;
+        const self = from.id === to.id;
+        const right = self || from.x <= to.x;
+        const a = anchor(from, edge.foreignKey.columns[0], right);
+        const b = anchor(to, edge.foreignKey.targetColumns[0], self || !right);
+        const bend = self ? 75 : Math.max(60, Math.abs(b.x - a.x) * 0.45);
+        const direction = right ? 1 : -1;
+        const d = self
+          ? `M${a.x},${a.y} C${a.x + bend},${a.y - 70} ${b.x + bend},${b.y + 75} ${b.x},${b.y + 12}`
+          : `M${a.x},${a.y} C${a.x + direction * bend},${a.y} ${b.x - direction * bend},${b.y} ${b.x},${b.y}`;
+        return (
+          <g
+            key={edge.id}
+            className={
+              selectedId && [edge.from, edge.to].includes(selectedId)
+                ? "schema-edge emphasized"
+                : "schema-edge"
+            }
+          >
+            <title>
+              {edge.foreignKey.name}: {edge.foreignKey.from.name} (
+              {edge.foreignKey.columns.join(", ")}) → {edge.foreignKey.to.name}{" "}
+              ({edge.foreignKey.targetColumns.join(", ")})
+            </title>
+            <path d={d} />
+            <circle cx={a.x} cy={a.y} r="3" />
+            <circle cx={b.x} cy={b.y + (self ? 12 : 0)} r="3" />
+          </g>
+        );
+      }),
+    [graph.edges, nodeMap, selectedId],
+  );
   return (
     <div
       className="schema-canvas"
@@ -162,12 +277,19 @@ export function SchemaDiagram({
       onDragStart={(event) => event.preventDefault()}
       onWheel={(event) => {
         if (gesture.current) return;
+        event.preventDefault();
         manual.current = true;
-        if (event.ctrlKey || event.metaKey)
-          setZoom((z) =>
-            Math.max(0.015, Math.min(1.8, z - event.deltaY * 0.002)),
-          );
-        else setPan((p) => ({ x: p.x - event.deltaX, y: p.y - event.deltaY }));
+        if (event.ctrlKey || event.metaKey) {
+          const rect = event.currentTarget.getBoundingClientRect();
+          const cursor = {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top,
+          };
+          const next = zoomDiagramAtPoint(zoom, pan, cursor, event.deltaY);
+          setZoom(next.zoom);
+          setPan(next.pan);
+        } else
+          setPan((p) => ({ x: p.x - event.deltaX, y: p.y - event.deltaY }));
       }}
     >
       <div className="schema-diagram-legend">
@@ -188,40 +310,7 @@ export function SchemaDiagram({
         aria-hidden="true"
       >
         <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-          {graph.edges.map((edge) => {
-            const from = nodeMap.get(edge.from),
-              to = nodeMap.get(edge.to);
-            if (!from || !to) return null;
-            const self = from.id === to.id;
-            const right = self || from.x <= to.x;
-            const a = anchor(from, edge.foreignKey.columns[0], right),
-              b = anchor(to, edge.foreignKey.targetColumns[0], self || !right);
-            const bend = self ? 75 : Math.max(60, Math.abs(b.x - a.x) * 0.45);
-            const direction = right ? 1 : -1;
-            const d = self
-              ? `M${a.x},${a.y} C${a.x + bend},${a.y - 70} ${b.x + bend},${b.y + 75} ${b.x},${b.y + 12}`
-              : `M${a.x},${a.y} C${a.x + direction * bend},${a.y} ${b.x - direction * bend},${b.y} ${b.x},${b.y}`;
-            return (
-              <g
-                key={edge.id}
-                className={
-                  selected && [edge.from, edge.to].includes(tableKey(selected))
-                    ? "schema-edge emphasized"
-                    : "schema-edge"
-                }
-              >
-                <title>
-                  {edge.foreignKey.name}: {edge.foreignKey.from.name} (
-                  {edge.foreignKey.columns.join(", ")}) →{" "}
-                  {edge.foreignKey.to.name} (
-                  {edge.foreignKey.targetColumns.join(", ")})
-                </title>
-                <path d={d} />
-                <circle cx={a.x} cy={a.y} r="3" />
-                <circle cx={b.x} cy={b.y + (self ? 12 : 0)} r="3" />
-              </g>
-            );
-          })}
+          {edgeElements}
         </g>
       </svg>
       <div
@@ -229,74 +318,13 @@ export function SchemaDiagram({
         style={{ transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})` }}
       >
         {nodes.map((node) => (
-          <section
+          <SchemaNodeCard
             key={node.id}
-            className={`schema-node ${node.id === (selected ? tableKey(selected) : "") ? "selected" : ""} ${node.external ? "external" : ""}`}
-            style={{
-              left: node.x,
-              top: node.y,
-              width: node.width,
-              height: node.height,
-            }}
-            data-schema-node={node.id}
-          >
-            <header>
-              <Table2 size={14} />
-              <Tooltip
-                content={`Click to inspect ${[node.table.schema, node.table.name].filter(Boolean).join(".")} · Drag to move`}
-              >
-                <button
-                  type="button"
-                  aria-pressed={node.id === selectedId}
-                  onClick={(event) => {
-                    if (event.detail === 0) {
-                      manual.current = true;
-                      onSelect(node.table);
-                    }
-                  }}
-                >
-                  {node.table.name}
-                </button>
-              </Tooltip>
-              <small>{node.table.kind}</small>
-            </header>
-            {node.external ? (
-              <p className="schema-external-label">Metadata not loaded</p>
-            ) : (
-              <div>
-                {node.metadata!.columns.slice(0, 6).map((column) => (
-                  <div className="schema-node-column" key={column.name}>
-                    <span className={column.pk ? "accent" : "subtle"}>
-                      {column.pk ? <KeyRound size={10} /> : "·"}
-                    </span>
-                    <Tooltip content={column.name}>
-                      <span>{column.name}</span>
-                    </Tooltip>
-                    <Tooltip content={column.dataType}>
-                      <code>{column.dataType}</code>
-                    </Tooltip>
-                  </div>
-                ))}
-              </div>
-            )}
-            <footer>
-              <span>{node.table.schema || "SQLite"}</span>
-              {node.metadata && node.metadata.columns.length > 6 ? (
-                <button
-                  onClick={(event) => {
-                    if (event.detail === 0) {
-                      manual.current = true;
-                      onSelect(node.table);
-                    }
-                  }}
-                >
-                  +{node.metadata.columns.length - 6} columns
-                </button>
-              ) : (
-                <span>{node.metadata?.columns.length ?? "—"} columns</span>
-              )}
-            </footer>
-          </section>
+            node={node}
+            selected={node.id === selectedId}
+            manual={manual}
+            onSelect={onSelect}
+          />
         ))}
       </div>
       <div className="graph-controls">

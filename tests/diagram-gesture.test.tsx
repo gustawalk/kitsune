@@ -5,6 +5,7 @@ import {
   moveDiagramGesture,
   finishDiagramGesture,
   type DiagramGesture,
+  zoomDiagramAtPoint,
 } from "../src/lib/diagram-gesture";
 function gesture(nodeId: string | undefined = "orders"): DiagramGesture {
   return {
@@ -38,6 +39,21 @@ test("background pan uses screen coordinates; unrelated and cancelled pointers c
   expect(moveDiagramGesture(card, 9, 500, 600)).toBeNull();
   expect(finishDiagramGesture(card, 9)).toBeUndefined();
   expect(finishDiagramGesture(card, 7, true)).toBeUndefined();
+});
+test("cursor anchored zoom keeps the database point under the pointer fixed", () => {
+  const initial = { zoom: 0.5, pan: { x: 40, y: 60 } };
+  const cursor = { x: 180, y: 240 };
+  const before = {
+    x: (cursor.x - initial.pan.x) / initial.zoom,
+    y: (cursor.y - initial.pan.y) / initial.zoom,
+  };
+  const next = zoomDiagramAtPoint(initial.zoom, initial.pan, cursor, -120);
+  expect(next.zoom).toBeGreaterThan(initial.zoom);
+  expect((cursor.x - next.pan.x) / next.zoom).toBeCloseTo(before.x);
+  expect((cursor.y - next.pan.y) / next.zoom).toBeCloseTo(before.y);
+  expect(zoomDiagramAtPoint(1.8, { x: 0, y: 0 }, cursor, -10000).zoom).toBe(
+    1.8,
+  );
 });
 test("schema edges use the viewport and keyboard selection remains accessible", () => {
   const table = { schema: "", name: "orders", kind: "table" };
