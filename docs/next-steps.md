@@ -26,7 +26,7 @@ Full diagrams load on request: at most 200 nodes and 1,000 displayed relationshi
 
 **Priority:** first new feature delivery after verification.
 
-- Add a filter builder with typed operators and explicit AND/OR groups, binding values in Rust. Preserve filters when navigating between schema, table, record, and investigation views.
+- Preserve and extend the filter builder with typed operators and explicit AND/OR groups, binding values in Rust. Add additional regression coverage for filter-to-relationship navigation.
 - Add CSV and typed JSON export with an explicit choice between the current page and a bounded filtered result. Show connection, scope, columns, and limits before export.
 - Stream export work in Rust with progress, cancellation, and an explicit destination. Do not route large datasets through the webview or automatically export hidden/excluded columns.
 - Add clear navigation back to the originating table/filter and persistent table column preferences.
@@ -80,7 +80,7 @@ AI SQL, cloud accounts, CDC, automatic historical restore, and Replay exports re
 
 ## Requested database expansion
 
-Database selection is now a separate first step; existing connection editing still opens its settings directly. Supported engines remain PostgreSQL and SQLite. New engines must land with end-to-end adapters rather than selectable placeholders. The user has been asked to prioritize MySQL/MariaDB, SQL Server, or DuckDB. Each delivery must include connection lifecycle, typed decoding, real catalog/key/index metadata, safe generated queries, paging, enforced read-only behavior, investigation traversal, watch compatibility, temporary-database integration tests, and packaging of any native dependencies. MySQL/MariaDB, SQL Server, and DuckDB are not implemented or certified by this UI change.
+Database selection is now a separate first step; existing connection editing still opens its settings directly. PostgreSQL, SQLite, MySQL, MariaDB, and SQL Server have adapter implementations; engine-specific integration coverage and packaging should continue to expand. Each adapter must retain connection lifecycle, typed decoding, real catalog/key/index metadata, safe generated queries, paging, enforced read-only behavior, investigation traversal, and watch compatibility. DuckDB is deferred.
 
 Diagram framing now uses a readable initial scale centered on the selected table, retains an explicit Fit all overview, and recomputes automatic framing after metadata/layout or canvas-size changes until the user moves the view. Focus selected restores record context without shrinking the whole schema.
 
@@ -90,7 +90,14 @@ The current delivery implements shared themed controls, strict observed-state re
 
 ## Workspace tools follow-up
 
-The grid/workspace delivery, typed grouped filters and presets, bounded exports, diagnostic comparisons, and timed/grouped watches are now implemented; see delivery-next-tools.md for precise scope. MySQL/MariaDB remains unimplemented and is the next adapter task. Live PostgreSQL, graphical desktop acceptance and other-platform packaging remain separate verification gates.
+The grid/workspace delivery, typed grouped filters and presets, bounded exports, diagnostic comparisons, and timed/grouped watches are implemented; see delivery-next-tools.md for precise scope. Current follow-up work is cross-engine integration coverage, graphical desktop acceptance, and other-platform packaging. Large-schema performance remains bounded by the diagram's deliberate node/edge limits; investigation into viewport-level graph rendering is a future improvement if real workloads justify it.
+
+## Current performance and exploration follow-ups
+
+- Keep the frontend request cache and mounted tab window bounded; collect representative startup, memory, scrolling, editor-input, tab-switch, and diagram interaction measurements before increasing cache or retention limits.
+- Keep exact table counts explicit and user-triggered. Add database-specific row estimates only where their accuracy and staleness can be communicated clearly.
+- Extend query result streaming/paging for engines where the driver supports safe, repeatable retrieval without re-executing statements with side effects. For arbitrary SQL, keep explicit truncation and safe failure behavior rather than rewriting user queries.
+- Add cross-platform tests for secure credential storage and recovery from locked/unavailable OS keyrings.
 
 ## Main-engine verification update
 
