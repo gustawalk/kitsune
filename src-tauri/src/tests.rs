@@ -4,6 +4,7 @@ fn config(path: String) -> ConnectionConfig {
     ConnectionConfig {
         id: "test".into(),
         name: "Test".into(),
+        color: String::new(),
         driver: "sqlite".into(),
         environment: "development".into(),
         path,
@@ -1082,4 +1083,30 @@ fn million_row_table_stays_page_bounded_and_counts_only_when_requested() {
     );
     drop(db);
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn connection_colors_default_validate_and_persist() {
+    let legacy = serde_json::json!({"id":"legacy", "name":"Legacy", "driver":"sqlite", "environment":"development", "path":"existing.sqlite3"});
+    let mut config: ConnectionConfig = serde_json::from_value(legacy).unwrap();
+    assert_eq!(config.color, "");
+    config.validate().unwrap();
+    for valid in ["", "#69b7d4", "#ABC123"] {
+        config.color = valid.into();
+        config.validate().unwrap();
+    }
+    for invalid in ["red", "#fff", "#12345g", "123456", "#12345678"] {
+        config.color = invalid.into();
+        assert_eq!(config.validate().unwrap_err().code, "VALIDATION");
+    }
+    config.color = "#69b7d4".into();
+    let path = temp_path();
+    let storage = Storage::open(&path).unwrap();
+    storage.put("connections", &config.id, &config).unwrap();
+    drop(storage);
+    let reopened = Storage::open(&path).unwrap();
+    let saved: ConnectionConfig = reopened.get("connections", &config.id).unwrap().unwrap();
+    assert_eq!(saved.color, "#69b7d4");
+    drop(reopened);
+    std::fs::remove_file(path).unwrap();
 }

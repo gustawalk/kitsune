@@ -3,6 +3,7 @@ export type Value = { kind: 'null' } | { kind: 'boolean'; value: boolean } | { k
 export interface ConnectionConfig {
   id: string;
   name: string;
+  color: string;
   driver: string;
   environment: string;
   host: string;

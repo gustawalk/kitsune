@@ -133,6 +133,7 @@ export const defaults: Settings = {
 export const emptyConnection = (): Connection => ({
   id: "",
   name: "",
+  color: "",
   driver: "postgres",
   environment: "development",
   host: "localhost",

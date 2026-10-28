@@ -34,6 +34,10 @@ const filter = z.object({ column: z.string(), operator: z.string(), value });
 const connection = z.object({
   id: z.string(),
   name: z.string(),
+  color: z
+    .string()
+    .regex(/^(?:#[0-9a-f]{6})?$/i)
+    .default(""),
   driver: z.enum(["sqlite", "postgres", "mysql", "mssql"]),
   environment: z.enum(["development", "staging", "production", "custom"]),
   host: z.string(),

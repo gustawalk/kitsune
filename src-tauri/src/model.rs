@@ -42,6 +42,8 @@ impl Value {
 pub struct ConnectionConfig {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub color: String,
     pub driver: String,
     pub environment: String,
     #[serde(default)]
@@ -81,6 +83,18 @@ impl ConnectionConfig {
     pub fn validate(&self) -> Result<(), Error> {
         if self.name.trim().is_empty() {
             return Err(Error::new("VALIDATION", "A connection name is required."));
+        }
+        let valid_color = self.color.is_empty()
+            || (self.color.len() == 7
+                && self.color.starts_with('#')
+                && self.color.as_bytes()[1..]
+                    .iter()
+                    .all(|c| c.is_ascii_hexdigit()));
+        if !valid_color {
+            return Err(Error::new(
+                "VALIDATION",
+                "Choose a six-digit hex connection color.",
+            ));
         }
         if !["development", "staging", "production", "custom"].contains(&self.environment.as_str())
         {
