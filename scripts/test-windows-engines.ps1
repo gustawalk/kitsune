@@ -377,49 +377,33 @@ log-error=$workConfig/server.log
                     throw "Disposable $($server.Name) server exited with code $($process.ExitCode)"
                 }
 
-                # Temporarily permit native command errors so we can
-                # capture connection failures without terminating the script.
-                $previousErrorAction = $ErrorActionPreference
-
+                # ArgumentList preserves SQL and TLS options as individual argv entries
+                # without PowerShell's native command argument serialization.
+                $probeStart = [System.Diagnostics.ProcessStartInfo]::new()
+                $probeStart.FileName = $client
+                $probeStart.UseShellExecute = $false
+                $probeStart.RedirectStandardOutput = $true
+                $probeStart.RedirectStandardError = $true
+                $probeArguments = @(
+                    '--no-defaults', '--protocol=tcp', '--host=127.0.0.1',
+                    "--port=$($server.Port)", '--user=kitsune_test',
+                    '--connect-timeout=5', '--skip-column-names'
+                ) + @($tlsArgs) + @(
+                    '--execute=SELECT marker FROM kitsune_test.kitsune_fixture_identity'
+                )
+                foreach ($probeArgument in $probeArguments) {
+                    [void]$probeStart.ArgumentList.Add([string]$probeArgument)
+                }
+                $probe = [System.Diagnostics.Process]::Start($probeStart)
                 try {
-                    $ErrorActionPreference = 'Continue'
-                    # MySQL --no-defaults still reads the per-user login file.
-                    # Isolate HOME as well as MYSQL_HOME to ignore runner options.
-                    $previousHome = $env:HOME
-                    $previousUserProfile = $env:USERPROFILE
-                    $previousMysqlHome = $env:MYSQL_HOME
-                    $env:HOME = $work
-                    $env:USERPROFILE = $work
-                    $env:MYSQL_HOME = $work
-
-                    $probeOutput = & $client `
-                        --no-defaults `
-                        --no-login-paths `
-                        --protocol=tcp `
-                        -h 127.0.0.1 `
-                        "--port=$($server.Port)" `
-                        -u kitsune_test `
-                        @tlsArgs `
-                        -N `
-                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1
-
-                    $probeExitCode = $LASTEXITCODE
+                    $stdoutTask = $probe.StandardOutput.ReadToEndAsync()
+                    $stderrTask = $probe.StandardError.ReadToEndAsync()
+                    $probe.WaitForExit()
+                    $probeExitCode = $probe.ExitCode
+                    $probeOutput = $stdoutTask.GetAwaiter().GetResult() + $stderrTask.GetAwaiter().GetResult()
                 }
                 finally {
-                    foreach ($environmentVariable in @(
-                        @{ Name = 'HOME'; Value = $previousHome },
-                        @{ Name = 'USERPROFILE'; Value = $previousUserProfile },
-                        @{ Name = 'MYSQL_HOME'; Value = $previousMysqlHome }
-                    )) {
-                        if ($null -eq $environmentVariable.Value) {
-                            Remove-Item "Env:$($environmentVariable.Name)" -ErrorAction SilentlyContinue
-                        }
-                        else {
-                            Set-Item "Env:$($environmentVariable.Name)" $environmentVariable.Value
-                        }
-                    }
-
-                    $ErrorActionPreference = $previousErrorAction
+                    $probe.Dispose()
                 }
 
                 if ($probeExitCode -eq 0) {
