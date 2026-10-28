@@ -1038,7 +1038,11 @@ kbd {
   color: var(--muted);
 }
 .foreign-key-value {
-  width: 100%;
+  display: inline-block;
+  width: auto;
+  max-width: 100%;
+  padding: 0;
+  vertical-align: middle;
   min-width: 0;
   overflow: hidden;
   color: var(--accent);

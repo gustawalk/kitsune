@@ -550,6 +550,11 @@ export function DataGrid({
                     const referenceLabel = referenceLabels?.get(
                       result.columns[col],
                     )?.[r];
+                    const isForeignKey =
+                      !!onForeignKey &&
+                      !!foreignKeys?.some((fk) =>
+                        fk.columns.includes(result.columns[col]),
+                      );
                     const active =
                       r >= Math.min(cell[0], anchor[0]) &&
                       r <= Math.max(cell[0], anchor[0]) &&
@@ -559,9 +564,11 @@ export function DataGrid({
                       <ContextMenu.Root key={col}>
                         <Tooltip
                           content={
-                            onEdit
-                              ? "Double-click to edit · Enter to inspect"
-                              : "Double-click to inspect full value"
+                            isForeignKey
+                              ? undefined
+                              : onEdit
+                                ? "Double-click to edit · Enter to inspect"
+                                : "Double-click to inspect full value"
                           }
                         >
                           <ContextMenu.Trigger asChild>
@@ -598,6 +605,13 @@ export function DataGrid({
                                 <button
                                   type="button"
                                   className="foreign-key-value"
+                                  onKeyDown={(event) => {
+                                    if (
+                                      event.key === "Enter" ||
+                                      event.key === " "
+                                    )
+                                      event.stopPropagation();
+                                  }}
                                   disabled={v.kind === "null"}
                                   title={
                                     referenceLabel !== undefined
