@@ -383,10 +383,13 @@ log-error=$workConfig/server.log
 
                 try {
                     $ErrorActionPreference = 'Continue'
-                    # Isolate the client from runner-level my.ini/my.cnf files.
-                    # MySQL's --no-defaults must be its first argument, and
-                    # MYSQL_HOME otherwise points at global client options.
+                    # MySQL --no-defaults still reads the per-user login file.
+                    # Isolate HOME as well as MYSQL_HOME to ignore runner options.
+                    $previousHome = $env:HOME
+                    $previousUserProfile = $env:USERPROFILE
                     $previousMysqlHome = $env:MYSQL_HOME
+                    $env:HOME = $work
+                    $env:USERPROFILE = $work
                     $env:MYSQL_HOME = $work
 
                     $probeOutput = & $client `
@@ -402,11 +405,17 @@ log-error=$workConfig/server.log
                     $probeExitCode = $LASTEXITCODE
                 }
                 finally {
-                    if ($null -eq $previousMysqlHome) {
-                        Remove-Item Env:MYSQL_HOME -ErrorAction SilentlyContinue
-                    }
-                    else {
-                        $env:MYSQL_HOME = $previousMysqlHome
+                    foreach ($environmentVariable in @(
+                        @{ Name = 'HOME'; Value = $previousHome },
+                        @{ Name = 'USERPROFILE'; Value = $previousUserProfile },
+                        @{ Name = 'MYSQL_HOME'; Value = $previousMysqlHome }
+                    )) {
+                        if ($null -eq $environmentVariable.Value) {
+                            Remove-Item "Env:$($environmentVariable.Name)" -ErrorAction SilentlyContinue
+                        }
+                        else {
+                            Set-Item "Env:$($environmentVariable.Name)" $environmentVariable.Value
+                        }
                     }
 
                     $ErrorActionPreference = $previousErrorAction
