@@ -887,7 +887,7 @@ fn appearance_preferences_persist_without_saving_other_drafts() {
     )
     .unwrap();
     for theme in [
-        "dark", "light", "system", "midnight", "forest", "sand", "oled",
+        "dark", "light", "system", "midnight", "forest", "sand", "oled", "violet",
     ] {
         let saved = call(
             &app,
@@ -909,7 +909,7 @@ fn appearance_preferences_persist_without_saving_other_drafts() {
         "VALIDATION"
     );
     let bootstrap = call(&app, "bootstrap", json!({})).unwrap();
-    assert_eq!(bootstrap["settings"]["theme"], "oled");
+    assert_eq!(bootstrap["settings"]["theme"], "violet");
     assert_eq!(bootstrap["settings"]["density"], "comfortable");
     assert_eq!(bootstrap["settings"]["rowLimit"], 444);
     drop(app);

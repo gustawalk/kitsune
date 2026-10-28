@@ -3,6 +3,7 @@ import {
   buildSchemaGraph,
   schemaViewport,
   filterSchemaTables,
+  relatedSchemaNodeIds,
   relatedTables,
   tableKey,
 } from "../src/lib/schema";
@@ -229,4 +230,24 @@ test("connected groups are packed without overlapping variable-height cards", ()
   expect(graph.nodes.find((n) => n.table.name === "customers")!.x).toBeLessThan(
     graph.nodes.find((n) => n.table.name === "orders")!.x,
   );
+});
+
+test("table filters expose only direct relationships", () => {
+  const accounts = table("accounts", "public");
+  const orders = table("orders", "public");
+  const payments = table("payments", "public");
+  const audit = table("audit", "public");
+  const graph = buildSchemaGraph([
+    metadata(accounts),
+    metadata(orders, [key(orders, accounts, "orders_account_fk")]),
+    metadata(payments, [key(payments, orders, "payments_order_fk")]),
+    metadata(audit),
+  ]);
+
+  const related = relatedSchemaNodeIds(tableKey(orders), graph.edges);
+
+  expect([...related].sort()).toEqual(
+    [accounts, orders, payments].map(tableKey).sort(),
+  );
+  expect(related.has(tableKey(audit))).toBe(false);
 });

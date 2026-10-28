@@ -310,3 +310,16 @@ export function arrangeCards(
   }
   return positions;
 }
+
+export function relatedSchemaNodeIds(
+  id: string,
+  edges: SchemaEdge[],
+): Set<string> {
+  const related = new Set([id]);
+  for (const edge of edges)
+    if (edge.from === id || edge.to === id) {
+      related.add(edge.from);
+      related.add(edge.to);
+    }
+  return related;
+}

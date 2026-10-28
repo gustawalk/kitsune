@@ -9,7 +9,7 @@ if (Test-Path "$openssl/openssl.exe") { $env:PATH = "$openssl;$env:PATH" }
 & bun scripts/engine-fixtures.ts certificates
 if ($LASTEXITCODE -ne 0) { throw 'TLS fixture generation failed' }
 $servers = @(
-  @{ Name='mysql'; Version='8.4.7'; Port=53306; Url='https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.7-winx64.zip'; Hash='b03c506fba179591d47f2e42c4a7b17c1dab06faed9fe3cff5acbd4e4f053f16'; Test='ipc_tests::mysql_network_workflow_fixture' },
+  @{ Name='mysql'; Version='8.4.7'; Port=53306; Url='https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.7-winx64.zip'; Hash='fd9bdbd4b5a878d31c8e4067078bd60665b1b3c4677fa1f099416d194b458aff'; Test='ipc_tests::mysql_network_workflow_fixture' },
   @{ Name='mariadb'; Version='11.4.9'; Port=53307; Url='https://archive.mariadb.org/mariadb-11.4.9/winx64-packages/mariadb-11.4.9-winx64.zip'; Hash='802f9f40a9dca774a3ba62f39c21093942954f178d6d7d458dc51453929bcdda'; Test='ipc_tests::mariadb_network_workflow_fixture' }
 )
 foreach ($server in $servers) {
@@ -19,7 +19,10 @@ foreach ($server in $servers) {
   try {
     $archive = Join-Path $work 'server.zip'
     Invoke-WebRequest $server.Url -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 5
-    if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLower() -ne $server.Hash) { throw 'Server archive checksum mismatch' }
+    $actualHash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLower()
+    if ($actualHash -ne $server.Hash) {
+      throw "Server archive checksum mismatch for $($server.Name) $($server.Version): expected $($server.Hash), got $actualHash; URL: $($server.Url)"
+    }
     & tar -xf $archive -C $work
     if ($LASTEXITCODE -ne 0) { throw 'Server archive extraction failed' }
     $base = Join-Path $work "$($server.Name)-$($server.Version)-winx64"

@@ -1,8 +1,7 @@
 import { startResize } from "./lib/resize";
 import { useLayoutPreference } from "./lib/layout-preferences";
 import { z } from "zod";
-import { Tooltip } from "./components/ui/tooltip";
-import { resolvedTheme } from "./lib/themes";
+import { normalizeTheme, resolvedTheme } from "./lib/themes";
 import { tabContext } from "./lib/tabs";
 import { modKey } from "./lib/utils";
 import {
@@ -16,6 +15,7 @@ import {
 import {
   AlertCircle,
   ArrowRight,
+  ChevronLeft,
   Check,
   ChevronRight,
   Database,
@@ -105,11 +105,61 @@ const tabIcons = {
 };
 function App() {
   const workspace = useWorkspace();
+  const tabsScrollRef = useRef<HTMLDivElement>(null);
+  const [tabOverflow, setTabOverflow] = useState({ start: false, end: false });
+  const updateTabOverflow = () => {
+    const element = tabsScrollRef.current;
+    if (!element) return;
+    setTabOverflow({
+      start: element.scrollLeft > 0,
+      end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
+    });
+  };
   useEffect(() => {
-    document
-      .querySelector<HTMLElement>(".workspace-tab.active")
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    const active = tabsScrollRef.current?.querySelector<HTMLElement>(
+      ".workspace-tab.active",
+    );
+    const viewport = tabsScrollRef.current;
+    if (!active || !viewport) return;
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+    if (left < viewport.scrollLeft) {
+      viewport.scrollTo({ left, behavior: "smooth" });
+    } else if (right > viewport.scrollLeft + viewport.clientWidth) {
+      viewport.scrollTo({
+        left: right - viewport.clientWidth,
+        behavior: "smooth",
+      });
+    }
   }, [workspace.activeTab]);
+  useEffect(() => {
+    const element = tabsScrollRef.current;
+    if (!element) return;
+    updateTabOverflow();
+    const observer = new ResizeObserver(updateTabOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [workspace.tabs.length]);
+  const scrollTabs = (direction: -1 | 1) => {
+    const element = tabsScrollRef.current;
+    if (!element) return;
+    const tabs = [...element.querySelectorAll<HTMLElement>(".workspace-tab")];
+    if (!tabs.length) return;
+    const edge =
+      direction > 0
+        ? element.scrollLeft + element.clientWidth + 1
+        : element.scrollLeft - 1;
+    const target =
+      direction > 0
+        ? tabs.find((tab) => tab.offsetLeft + tab.offsetWidth > edge)
+        : [...tabs].reverse().find((tab) => tab.offsetLeft < edge);
+    if (target) {
+      element.scrollTo({
+        left: direction > 0 ? target.offsetLeft : target.offsetLeft,
+        behavior: "smooth",
+      });
+    }
+  };
   const bootstrap = useRemote<Bootstrap>("bootstrap", {});
   const initialized = useRef(false);
   const [connectionDialog, setConnectionDialog] = useState<{
@@ -120,8 +170,7 @@ function App() {
   const [deleting, setDeleting] = useState<Connection>();
   const [writeConfirmation, setWriteConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Mount workspace panels only when first visited. Keep a small recent set
-  // warm so ordinary tab switching is fast without mounting every grid/editor.
+  // Keep only a small recent set of heavy panels mounted for fast tab switching.
   const [mountedTabs, setMountedTabs] = useState<string[]>(() =>
     workspace.activeTab ? [workspace.activeTab] : [],
   );
@@ -158,7 +207,11 @@ function App() {
     if (!bootstrap.data || initialized.current) return;
     initialized.current = true;
     const data = bootstrap.data;
-    const settings = { ...defaults, ...data.settings };
+    const settings = {
+      ...defaults,
+      ...data.settings,
+      theme: normalizeTheme(data.settings?.theme || defaults.theme),
+    };
     const restoredTabs = settings.restoreTabs
       ? (data.workspace?.tabs || []).filter(
           (t) => typeof t.id === "string" && t.kind in tabIcons,
@@ -435,28 +488,44 @@ function App() {
           >
             <img src="/icon.svg" alt="" width={15} height={15} />
           </button>
-          <div className="tabs-scroll">
-            {workspace.tabs.map((tab) => {
-              const Icon = tabIcons[tab.kind];
-              const connection = workspace.connections.find(
-                (c) => c.id === tab.connectionId,
-              );
-              const context = tabContext(tab, connection?.name);
-              return (
-                <div
-                  className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
-                  key={tab.id}
-                  data-kind={tab.kind}
-                  data-connection-color={connection?.color || undefined}
-                  style={
-                    connection?.color
-                      ? ({ "--tab-tone": connection.color } as CSSProperties)
-                      : undefined
-                  }
-                >
-                  <Tooltip content={`${tab.title} · ${context}`}>
+          <div
+            className={`tabs-scroll-wrap ${tabOverflow.start ? "has-start-overflow" : ""} ${tabOverflow.end ? "has-end-overflow" : ""}`}
+          >
+            {tabOverflow.start && (
+              <button
+                className="tabs-scroll-button tabs-scroll-previous"
+                aria-label="Scroll tabs left"
+                onClick={() => scrollTabs(-1)}
+              >
+                <ChevronLeft size={15} />
+              </button>
+            )}
+            <div
+              className="tabs-scroll"
+              ref={tabsScrollRef}
+              onScroll={updateTabOverflow}
+            >
+              {workspace.tabs.map((tab) => {
+                const Icon = tabIcons[tab.kind];
+                const connection = workspace.connections.find(
+                  (c) => c.id === tab.connectionId,
+                );
+                const context = tabContext(tab, connection?.name);
+                return (
+                  <div
+                    className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
+                    key={tab.id}
+                    data-kind={tab.kind}
+                    data-connection-color={connection?.color || undefined}
+                    style={
+                      connection?.color
+                        ? ({ "--tab-tone": connection.color } as CSSProperties)
+                        : undefined
+                    }
+                  >
                     <button
                       role="tab"
+                      title={`${tab.title} · ${context}`}
                       tabIndex={tab.id === workspace.activeTab ? 0 : -1}
                       aria-selected={tab.id === workspace.activeTab}
                       onClick={() => update({ activeTab: tab.id })}
@@ -479,17 +548,26 @@ function App() {
                           <span className="unsaved-dot" />
                         )}
                     </button>
-                  </Tooltip>
-                  <button
-                    className="tab-close"
-                    aria-label={`Close ${tab.title}`}
-                    onClick={() => requestClose(tab)}
-                  >
-                    <X size={12} />
-                  </button>
-                </div>
-              );
-            })}
+                    <button
+                      className="tab-close"
+                      aria-label={`Close ${tab.title}`}
+                      onClick={() => requestClose(tab)}
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            {tabOverflow.end && (
+              <button
+                className="tabs-scroll-button tabs-scroll-next"
+                aria-label="Scroll tabs right"
+                onClick={() => scrollTabs(1)}
+              >
+                <ChevronRight size={15} />
+              </button>
+            )}
           </div>
           <Button
             size="icon"

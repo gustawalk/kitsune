@@ -9,16 +9,22 @@ import {
 } from "../lib/diagram-gesture";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Eye,
+  EyeOff,
   Focus,
-  LocateFixed,
+  GitBranch,
   KeyRound,
-  Minus,
-  Plus,
-  Table2,
   LayoutGrid,
+  LocateFixed,
+  Minus,
+  Network,
+  Plus,
+  RotateCcw,
+  Table2,
+  Undo2,
 } from "lucide-react";
 import type { SchemaGraph, SchemaNode } from "../lib/schema";
-import { schemaViewport, tableKey } from "../lib/schema";
+import { relatedSchemaNodeIds, schemaViewport, tableKey } from "../lib/schema";
 import type { TableRef } from "../lib/types";
 const SchemaNodeCard = memo(function SchemaNodeCard({
   node,
@@ -51,7 +57,7 @@ const SchemaNodeCard = memo(function SchemaNodeCard({
       <header>
         <Table2 size={14} />
         <Tooltip
-          content={`Click to inspect ${[node.table.schema, node.table.name].filter(Boolean).join(".")} · Drag to move`}
+          content={`Click to inspect ${[node.table.schema, node.table.name].filter(Boolean).join(".")} · Drag to move · Right-click to filter`}
         >
           <button type="button" aria-pressed={selected} onClick={inspect}>
             {node.table.name}
@@ -115,17 +121,114 @@ export function SchemaDiagram({
       .refine((v) => Object.keys(v).length <= 200),
     {} as Record<string, { x: number; y: number }>,
   );
+  const [hiddenNodes, setHiddenNodes] = useState<Set<string>>(() => new Set());
+  const [canUndo, setCanUndo] = useState(false);
+  const history = useRef<
+    {
+      hidden: Set<string>;
+      positions: Record<string, { x: number; y: number }>;
+    }[]
+  >([]);
+  const dragSnapshot = useRef<{
+    hidden: Set<string>;
+    positions: Record<string, { x: number; y: number }>;
+  } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    id: string;
+    left: number;
+    top: number;
+  } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const manual = useRef(false);
   const gesture = useRef<DiagramGesture | null>(null);
+  function snapshot() {
+    return { hidden: hiddenNodes, positions };
+  }
+  function pushHistory(previous = snapshot()) {
+    history.current.push(previous);
+    if (history.current.length > 100) history.current.shift();
+    setCanUndo(true);
+  }
+  function undo() {
+    if (gesture.current) return;
+    const previous = history.current.pop();
+    if (!previous) return;
+    setHiddenNodes(previous.hidden);
+    setPositions(previous.positions);
+    setCanUndo(history.current.length > 0);
+    manual.current = true;
+    setContextMenu(null);
+  }
+  const undoRef = useRef(undo);
+  useEffect(() => {
+    undoRef.current = undo;
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        !(event.ctrlKey || event.metaKey) ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "z" ||
+        !canvas.current ||
+        canvas.current.closest("[hidden]") ||
+        gesture.current
+      )
+        return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        target?.closest(
+          "input, textarea, select, [contenteditable='true'], .cm-editor, [role='dialog']",
+        )
+      )
+        return;
+      event.preventDefault();
+      undoRef.current();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!(event.target as Element).closest(".schema-context-menu"))
+        setContextMenu(null);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    const focus = requestAnimationFrame(() =>
+      contextMenuRef.current
+        ?.querySelector<HTMLButtonElement>("button:not(:disabled)")
+        ?.focus(),
+    );
+    window.addEventListener("pointerdown", closeOutside);
+    window.addEventListener("keydown", closeEscape);
+    return () => {
+      cancelAnimationFrame(focus);
+      window.removeEventListener("pointerdown", closeOutside);
+      window.removeEventListener("keydown", closeEscape);
+    };
+  }, [contextMenu]);
+  const visibleGraphNodes = useMemo(
+    () => graph.nodes.filter((node) => !hiddenNodes.has(node.id)),
+    [graph.nodes, hiddenNodes],
+  );
+  const visibleGraphEdges = useMemo(
+    () =>
+      graph.edges.filter(
+        (edge) => !hiddenNodes.has(edge.from) && !hiddenNodes.has(edge.to),
+      ),
+    [graph.edges, hiddenNodes],
+  );
   const nodes = useMemo(
     () =>
-      graph.nodes.map((node) => {
+      visibleGraphNodes.map((node) => {
         const position = positions[node.id];
         return position && (position.x !== node.x || position.y !== node.y)
           ? { ...node, ...position }
           : node;
       }),
-    [graph.nodes, positions],
+    [visibleGraphNodes, positions],
   );
   const nodeMap = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const frame = useCallback(
@@ -142,7 +245,10 @@ export function SchemaDiagram({
     },
     [nodes],
   );
-  const selectedId = selected ? tableKey(selected) : undefined;
+  const selectedId =
+    selected && visibleGraphNodes.some((node) => node.id === tableKey(selected))
+      ? tableKey(selected)
+      : undefined;
   useEffect(() => {
     const element = canvas.current;
     if (!element) return;
@@ -168,6 +274,7 @@ export function SchemaDiagram({
     const card = target.closest<HTMLElement>("[data-schema-node]");
     if (!card && target.closest("button,.graph-controls")) return;
     const node = card ? nodeMap.get(card.dataset.schemaNode!) : undefined;
+    dragSnapshot.current = node ? snapshot() : null;
     event.preventDefault();
     manual.current = true;
     gesture.current = {
@@ -193,12 +300,7 @@ export function SchemaDiagram({
     );
     if (!next) return;
     if (active.nodeId)
-      setPositions((p) => ({
-        ...Object.fromEntries(
-          Object.entries(p).filter(([id]) => nodeMap.has(id)),
-        ),
-        [active.nodeId!]: next,
-      }));
+      setPositions((previous) => ({ ...previous, [active.nodeId!]: next }));
     else setPan(next);
   }
   function endGesture(
@@ -210,6 +312,9 @@ export function SchemaDiagram({
     // Some platforms deliver pointerup without a final pointermove.
     if (!cancelled) moveGesture(event);
     const id = finishDiagramGesture(active, event.pointerId, cancelled);
+    if (active.nodeId && active.moved && !cancelled && dragSnapshot.current)
+      pushHistory(dragSnapshot.current);
+    dragSnapshot.current = null;
     gesture.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -220,7 +325,7 @@ export function SchemaDiagram({
   }
   function anchor(node: SchemaNode, column: string, right: boolean) {
     const index =
-      node.metadata?.columns.findIndex((c) => c.name === column) ?? -1;
+      node.metadata?.columns.findIndex((item) => item.name === column) ?? -1;
     return {
       x: node.x + (right ? node.width : 0),
       y: node.y + (index >= 0 ? 49 + Math.min(index, 5) * 22 : 42),
@@ -228,7 +333,7 @@ export function SchemaDiagram({
   }
   const edgeElements = useMemo(
     () =>
-      graph.edges.map((edge) => {
+      visibleGraphEdges.map((edge) => {
         const from = nodeMap.get(edge.from),
           to = nodeMap.get(edge.to);
         if (!from || !to) return null;
@@ -261,12 +366,82 @@ export function SchemaDiagram({
           </g>
         );
       }),
-    [graph.edges, nodeMap, selectedId],
+    [visibleGraphEdges, nodeMap, selectedId],
   );
+  function openContextMenu(event: React.MouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const target = (event.target as Element).closest<HTMLElement>(
+      "[data-schema-node]",
+    );
+    if (!target) {
+      setContextMenu(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({
+      id: target.dataset.schemaNode!,
+      left: Math.max(8, Math.min(event.clientX - rect.left, rect.width - 258)),
+      top: Math.max(8, Math.min(event.clientY - rect.top, rect.height - 270)),
+    });
+  }
+  function applyContextAction(
+    action: "hide" | "hide-related" | "isolate" | "reveal" | "all",
+  ) {
+    const id = contextMenu?.id;
+    if (!id) {
+      if (action === "all" && hiddenNodes.size) {
+        pushHistory();
+        setHiddenNodes(new Set());
+        // Keep the current pan/zoom; only the visible cards change.
+        manual.current = true;
+        setContextMenu(null);
+      }
+      return;
+    }
+    const related = relatedSchemaNodeIds(id, graph.edges);
+    let next = hiddenNodes;
+    if (action === "hide") next = new Set([...hiddenNodes, id]);
+    else if (action === "isolate")
+      next = new Set(
+        graph.nodes
+          .filter((node) => !related.has(node.id))
+          .map((node) => node.id),
+      );
+    else if (action === "hide-related")
+      next = new Set([
+        ...hiddenNodes,
+        ...[...related].filter((nodeId) => nodeId !== id),
+      ]);
+    else if (action === "reveal")
+      next = new Set([...hiddenNodes].filter((nodeId) => !related.has(nodeId)));
+    else next = new Set();
+    const changed =
+      next.size !== hiddenNodes.size ||
+      [...next].some((nodeId) => !hiddenNodes.has(nodeId));
+    if (changed) {
+      pushHistory();
+      setHiddenNodes(next);
+    }
+    // Filtering only adds/removes cards. Do not re-arrange or re-fit the view.
+    manual.current = true;
+    setContextMenu(null);
+  }
+  const contextNode = contextMenu
+    ? graph.nodes.find((node) => node.id === contextMenu.id)
+    : undefined;
+  const contextRelated = contextMenu
+    ? relatedSchemaNodeIds(contextMenu.id, graph.edges)
+    : new Set<string>();
+  const hiddenRelated = contextMenu
+    ? [...contextRelated].filter(
+        (nodeId) => nodeId !== contextMenu.id && hiddenNodes.has(nodeId),
+      ).length
+    : 0;
   return (
     <div
       className="schema-canvas"
       ref={canvas}
+      onContextMenu={openContextMenu}
       onPointerDown={beginGesture}
       onPointerMove={moveGesture}
       onPointerUp={(event) => endGesture(event)}
@@ -278,6 +453,7 @@ export function SchemaDiagram({
       onWheel={(event) => {
         if (gesture.current) return;
         event.preventDefault();
+        setContextMenu(null);
         manual.current = true;
         if (event.ctrlKey || event.metaKey) {
           const rect = event.currentTarget.getBoundingClientRect();
@@ -300,9 +476,22 @@ export function SchemaDiagram({
         <span className="schema-fk-marker" />
         Declared foreign key
         <span className="spacer" />
-        {graph.nodes.filter((n) => !n.external).length} tables/views ·{" "}
-        {graph.edges.length} relationships
+        {visibleGraphNodes.filter((n) => !n.external).length}
+        {hiddenNodes.size
+          ? ` / ${graph.nodes.filter((n) => !n.external).length}`
+          : ""}{" "}
+        tables/views · {visibleGraphEdges.length}
+        {hiddenNodes.size ? ` / ${graph.edges.length}` : ""} relationships
       </div>
+      {hiddenNodes.size > 0 && (
+        <button
+          className="schema-control-button schema-filter-reset"
+          onClick={() => applyContextAction("all")}
+        >
+          <Eye size={12} />
+          Show all tables · {hiddenNodes.size} hidden
+        </button>
+      )}
       <svg
         className="schema-edges schema-edge-viewport"
         width="100%"
@@ -327,11 +516,90 @@ export function SchemaDiagram({
           />
         ))}
       </div>
+      {contextMenu && (
+        <div
+          className="schema-context-menu"
+          ref={contextMenuRef}
+          role="menu"
+          aria-label="Table filters"
+          style={{ left: contextMenu.left, top: contextMenu.top }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <header>
+            <small>Table filters</small>
+            <strong
+              title={
+                contextNode
+                  ? [contextNode.table.schema, contextNode.table.name]
+                      .filter(Boolean)
+                      .join(".")
+                  : undefined
+              }
+            >
+              {contextNode
+                ? [contextNode.table.schema, contextNode.table.name]
+                    .filter(Boolean)
+                    .join(".")
+                : "Table"}
+            </strong>
+          </header>
+          <button role="menuitem" onClick={() => applyContextAction("hide")}>
+            <EyeOff size={13} />
+            Hide table
+          </button>
+          <button role="menuitem" onClick={() => applyContextAction("isolate")}>
+            <Network size={13} />
+            Show only this table + relations
+            <span>{Math.max(0, contextRelated.size - 1)}</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={!hiddenRelated}
+            onClick={() => applyContextAction("reveal")}
+          >
+            <Eye size={13} />
+            Reveal related tables
+            <span>{hiddenRelated || ""}</span>
+          </button>
+          <button
+            role="menuitem"
+            disabled={contextRelated.size <= 1}
+            onClick={() => applyContextAction("hide-related")}
+          >
+            <GitBranch size={13} />
+            Hide related tables
+          </button>
+          <hr />
+          <button
+            role="menuitem"
+            disabled={!hiddenNodes.size}
+            onClick={() => applyContextAction("all")}
+          >
+            <RotateCcw size={13} />
+            Show all tables
+            <span>{hiddenNodes.size || ""}</span>
+          </button>
+        </div>
+      )}
       <div className="graph-controls">
+        <Tooltip
+          content={
+            canUndo ? "Undo last canvas change (Ctrl/⌘ Z)" : "Nothing to undo"
+          }
+        >
+          <button
+            aria-label="Undo last canvas change"
+            disabled={!canUndo}
+            onClick={undo}
+          >
+            <Undo2 size={16} />
+          </button>
+        </Tooltip>
         <Tooltip content={"Arrange related tables"}>
           <button
             aria-label="Arrange related tables"
             onClick={() => {
+              if (Object.keys(positions).length) pushHistory();
               manual.current = false;
               setPositions({});
             }}
@@ -383,8 +651,8 @@ export function SchemaDiagram({
         <span>{Math.round(zoom * 100)}%</span>
       </div>
       <div className="graph-caption">
-        Drag background to pan · Drag table cards to arrange · Ctrl/⌘ + scroll
-        to zoom
+        Right-click a table to filter · Drag background to pan · Ctrl/⌘ + scroll
+        to zoom · Ctrl/⌘ Z to undo
       </div>
     </div>
   );

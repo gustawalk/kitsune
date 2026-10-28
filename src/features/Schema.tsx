@@ -21,6 +21,7 @@ import {
   FileCode2,
   KeyRound,
   Network,
+  Paintbrush,
   PanelRight,
   RefreshCw,
   Search,
@@ -55,6 +56,7 @@ import {
   SCHEMA_DIAGRAM_LIMIT,
   tableKey,
 } from "../lib/schema";
+type SchemaView = "catalog" | "diagram";
 interface DiagramState {
   metadata: Metadata[];
   links: ForeignKey[];
@@ -95,7 +97,7 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
     { connectionId: tab.connectionId },
     connected && active,
   );
-  const [view, setView] = useState<"catalog" | "diagram">("catalog"),
+  const [view, setView] = useState<SchemaView>("catalog"),
     [mode, setMode] = useState<"all" | "focused">("all"),
     [namespace, setNamespace] = useState<string | null>(null),
     [kind, setKind] = useState("all"),
@@ -507,7 +509,7 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
             )}
           </div>
         </div>
-      ) : (
+      ) : view === "diagram" ? (
         <>
           <div className="schema-diagram-toolbar">
             <Select
@@ -619,7 +621,7 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
               <Empty
                 icon={<Network size={28} />}
                 title="See how your database fits together"
-                detail="Load a full ER diagram or focus on one table. Only declared foreign keys become relationships."
+                detail="Load a full ER diagram or focus on one table. Right-click a table to hide it or isolate its relationships."
               />
             )}
             {detailsVisible && selected && details.data && (
@@ -649,6 +651,8 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
             )}
           </div>
         </>
+      ) : (
+        <></>
       )}
     </div>
   );

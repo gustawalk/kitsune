@@ -563,7 +563,7 @@ impl Default for ApplicationSettings {
 impl ApplicationSettings {
     pub fn validate(&self) -> Result<(), Error> {
         if ![
-            "dark", "light", "system", "midnight", "forest", "sand", "oled",
+            "dark", "light", "system", "midnight", "forest", "sand", "oled", "violet",
         ]
         .contains(&self.theme.as_str())
             || !["compact", "comfortable"].contains(&self.density.as_str())
