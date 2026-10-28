@@ -1303,7 +1303,16 @@ kbd {
   background: var(--hover);
 }
 .grid-row.selected-row {
-  background: var(--hover);
+  background: var(--selection);
+}
+.grid-row.selected-row::after,
+.grid-row:has(.active-cell)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--accent);
+  pointer-events: none;
+  z-index: 1;
 }
 .grid-cell.active-cell {
   background: var(--selection);
