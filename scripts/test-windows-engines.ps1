@@ -359,10 +359,6 @@ log-error=$workConfig/server.log
         $lastProbeError = ''
 
         $tlsArgs = if ($server.Name -eq 'mysql') {
-            # PowerShell 7.3+ can interpret native stderr from mysql.exe as
-            # a terminating error under $ErrorActionPreference = 'Stop'.
-            # Suppress native stderr redirection for this probe so connection
-            # errors are captured and retried as intended.
             @('--ssl-mode=REQUIRED')
         }
         else {
@@ -387,6 +383,11 @@ log-error=$workConfig/server.log
 
                 try {
                     $ErrorActionPreference = 'Continue'
+                    # Isolate the client from runner-level my.ini/my.cnf files.
+                    # MySQL's --no-defaults must be its first argument, and
+                    # MYSQL_HOME otherwise points at global client options.
+                    $previousMysqlHome = $env:MYSQL_HOME
+                    $env:MYSQL_HOME = $work
 
                     $probeOutput = & $client `
                         --no-defaults `
@@ -396,11 +397,18 @@ log-error=$workConfig/server.log
                         -u kitsune_test `
                         @tlsArgs `
                         -N `
-                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1 | Out-String
+                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1
 
                     $probeExitCode = $LASTEXITCODE
                 }
                 finally {
+                    if ($null -eq $previousMysqlHome) {
+                        Remove-Item Env:MYSQL_HOME -ErrorAction SilentlyContinue
+                    }
+                    else {
+                        $env:MYSQL_HOME = $previousMysqlHome
+                    }
+
                     $ErrorActionPreference = $previousErrorAction
                 }
 
