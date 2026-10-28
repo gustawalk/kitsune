@@ -4,7 +4,14 @@ import { Tooltip } from "./components/ui/tooltip";
 import { resolvedTheme } from "./lib/themes";
 import { tabContext } from "./lib/tabs";
 import { modKey } from "./lib/utils";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -435,16 +442,21 @@ function App() {
           <div className="tabs-scroll">
             {workspace.tabs.map((tab) => {
               const Icon = tabIcons[tab.kind];
-              const context = tabContext(
-                tab,
-                workspace.connections.find((c) => c.id === tab.connectionId)
-                  ?.name,
+              const connection = workspace.connections.find(
+                (c) => c.id === tab.connectionId,
               );
+              const context = tabContext(tab, connection?.name);
               return (
                 <div
                   className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
                   key={tab.id}
                   data-kind={tab.kind}
+                  data-connection-color={connection?.color || undefined}
+                  style={
+                    connection?.color
+                      ? ({ "--tab-tone": connection.color } as CSSProperties)
+                      : undefined
+                  }
                 >
                   <Tooltip content={`${tab.title} · ${context}`}>
                     <button

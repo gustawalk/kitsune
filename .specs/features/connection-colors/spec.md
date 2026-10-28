@@ -56,5 +56,5 @@ Verification: standard (presentation settings following existing persistence pat
 | ID | Requirement | Status |
 | --- | --- | --- |
 | COLOR-01 | Persistence, old connections, validation | Verified |
-| COLOR-02 | Picker and tab appearance | Implementing |
+| COLOR-02 | Picker and tab appearance | Verified |
 | COLOR-03 | Resize selection suppression and cleanup | Implementing |

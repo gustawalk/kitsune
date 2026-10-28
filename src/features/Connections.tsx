@@ -1,3 +1,4 @@
+import { ConnectionColorPicker } from "../components/ConnectionColorPicker";
 import { Tooltip } from "../components/ui/tooltip";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
@@ -248,6 +249,12 @@ export function ConnectionDialog({
                   )}
                 </Select>
               </Field>
+              <div className="full">
+                <ConnectionColorPicker
+                  value={config.color}
+                  onChange={(color) => patch({ color })}
+                />
+              </div>
               {config.driver === "mysql" && (
                 <p className="muted small full">
                   Rust TLS validates the server certificate and hostname in
