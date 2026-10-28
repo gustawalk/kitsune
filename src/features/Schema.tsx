@@ -1,3 +1,4 @@
+import { startResize } from "../lib/resize";
 import { useLayoutPreference } from "../lib/layout-preferences";
 import { z } from "zod";
 import { Tooltip } from "../components/ui/tooltip";
@@ -115,12 +116,7 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
       initial = detailsWidth;
     const move = (e: PointerEvent) =>
       setDetailsWidth(Math.min(600, Math.max(270, initial + x - e.clientX)));
-    const end = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", end);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", end);
+    startResize(event, move);
   }
   const deferredSearch = useDeferredValue(search);
   const filtered = useMemo(

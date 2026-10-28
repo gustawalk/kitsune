@@ -1,3 +1,4 @@
+import { startResize } from "./lib/resize";
 import { useLayoutPreference } from "./lib/layout-preferences";
 import { z } from "zod";
 import { Tooltip } from "./components/ui/tooltip";
@@ -308,12 +309,7 @@ function App() {
           Math.min(650, Math.max(270, initial - e.clientX + x)),
         );
     };
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    startResize(event, move);
   }
   async function changeWriteAccess(enabled: boolean) {
     setBusy(true);

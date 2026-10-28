@@ -1,3 +1,4 @@
+import { startResize } from "../lib/resize";
 import type { ReferenceLabels } from "../lib/reference-values";
 import { ContextMenu } from "radix-ui";
 import {
@@ -173,12 +174,7 @@ export function DataGrid({
         ...w,
         [index]: Math.max(80, Math.min(900, initial + e.clientX - x)),
       }));
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    startResize(event, move);
   }
   function copySelection() {
     const minRow = Math.min(cell[0], anchor[0]),

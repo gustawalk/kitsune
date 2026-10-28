@@ -1,3 +1,4 @@
+import { startResize } from "../lib/resize";
 import { PortableSql } from "../components/PortableSql";
 import { QueryDiagnostics } from "../components/QueryDiagnostics";
 import { Checkbox } from "../components/ui/checkbox";
@@ -569,12 +570,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
             setEditorHeight(
               Math.max(120, Math.min(700, initial + event.clientY - y)),
             );
-          const up = () => {
-            window.removeEventListener("pointermove", move);
-            window.removeEventListener("pointerup", up);
-          };
-          window.addEventListener("pointermove", move);
-          window.addEventListener("pointerup", up);
+          startResize(e, move);
         }}
       />
       <div className="results-header">
