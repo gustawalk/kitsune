@@ -10,14 +10,16 @@ Set-Location $root
 $fixture = Join-Path $root '.kitsune-engine-tests'
 New-Item -ItemType Directory -Force -Path $fixture | Out-Null
 
-# Make OpenSSL available for TLS fixture generation.
+# Make OpenSSL available for certificate generation.
 $openssl = 'C:\Program Files\Git\usr\bin'
+
 if (Test-Path (Join-Path $openssl 'openssl.exe')) {
     $env:PATH = "$openssl;$env:PATH"
 }
 
 # Generate TLS certificates.
 & bun scripts/engine-fixtures.ts certificates
+
 if ($LASTEXITCODE -ne 0) {
     throw 'TLS fixture generation failed'
 }
@@ -42,8 +44,112 @@ $servers = @(
     }
 )
 
+# Convert Windows paths to forward-slash paths for configuration files.
+function Convert-ToConfigPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return $Path.Replace('\', '/')
+}
+
+# Print server logs without masking the original failure.
+function Show-ServerLog {
+    param(
+        [string]$WorkDirectory,
+        [int]$Tail = 100
+    )
+
+    $logPath = Join-Path $WorkDirectory 'server.log'
+
+    if (Test-Path -LiteralPath $logPath) {
+        Write-Host '--- Database server log ---' -ForegroundColor Yellow
+
+        Get-Content -LiteralPath $logPath -Tail $Tail -ErrorAction Continue
+
+        Write-Host '--- End database server log ---' -ForegroundColor Yellow
+    }
+    else {
+        Write-Warning "Server log not found: $logPath"
+    }
+}
+
+# Stop the process, then wait for Windows to release its handles.
+function Stop-DisposableServer {
+    param(
+        [System.Diagnostics.Process]$ServerProcess,
+        [string]$ServerName
+    )
+
+    if ($null -eq $ServerProcess) {
+        return
+    }
+
+    try {
+        $ServerProcess.Refresh()
+
+        if (-not $ServerProcess.HasExited) {
+            Write-Host "Stopping $ServerName (PID $($ServerProcess.Id))..."
+
+            Stop-Process `
+                -Id $ServerProcess.Id `
+                -Force `
+                -ErrorAction Stop
+
+            if (-not $ServerProcess.WaitForExit(15000)) {
+                Write-Warning "$ServerName did not exit within 15 seconds"
+            }
+        }
+    }
+    catch {
+        Write-Warning "Failed to stop $ServerName : $($_.Exception.Message)"
+    }
+    finally {
+        $ServerProcess.Dispose()
+    }
+}
+
+# Retry cleanup because Windows can retain file handles briefly.
+function Remove-DisposableDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Directory,
+
+        [int]$MaxAttempts = 10
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if (-not (Test-Path -LiteralPath $Directory)) {
+            return
+        }
+
+        try {
+            Remove-Item `
+                -LiteralPath $Directory `
+                -Recurse `
+                -Force `
+                -ErrorAction Stop
+
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                Write-Warning "Unable to remove $Directory after $MaxAttempts attempts: $($_.Exception.Message)"
+                return
+            }
+
+            Write-Host "Cleanup attempt $attempt failed; retrying..."
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
 foreach ($server in $servers) {
-    Write-Host "Testing $($server.Name) $($server.Version)..." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "========================================" -ForegroundColor Cyan
+    Write-Host "Testing $($server.Name) $($server.Version)" -ForegroundColor Cyan
+    Write-Host "========================================" -ForegroundColor Cyan
 
     $work = Join-Path $env:RUNNER_TEMP "kitsune-$($server.Name)-$([guid]::NewGuid())"
 
@@ -52,7 +158,10 @@ foreach ($server in $servers) {
     $process = $null
 
     try {
-        # Download server archive.
+        # ------------------------------------------------------------
+        # 1. Download server archive.
+        # ------------------------------------------------------------
+
         $archive = Join-Path $work 'server.zip'
 
         Write-Host "Downloading $($server.Name)..."
@@ -63,14 +172,19 @@ foreach ($server in $servers) {
             -MaximumRetryCount 3 `
             -RetryIntervalSec 5
 
-        # Verify SHA-256 checksum.
+        # ------------------------------------------------------------
+        # 2. Verify SHA-256 checksum.
+        # ------------------------------------------------------------
+
         Write-Host 'Verifying SHA-256 checksum...'
 
-        $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actualHash = (
+            Get-FileHash -LiteralPath $archive -Algorithm SHA256
+        ).Hash.ToLowerInvariant()
 
         if ($actualHash -ne $server.Hash) {
             throw @"
-Server archive checksum mismatch:
+Server archive checksum mismatch.
 Server:   $($server.Name)
 Version:  $($server.Version)
 Expected: $($server.Hash)
@@ -79,15 +193,18 @@ URL:      $($server.Url)
 "@
         }
 
-        # Extract ZIP using Windows native tar.exe.
-        # Explicit path avoids GNU tar from Git for Windows,
-        # which interprets D:\ paths as remote host references.
+        Write-Host 'Checksum verified.' -ForegroundColor Green
+
+        # ------------------------------------------------------------
+        # 3. Extract ZIP using Windows native tar.exe.
+        # ------------------------------------------------------------
+
         Write-Host 'Extracting server archive...'
 
         $windowsTar = Join-Path $env:SystemRoot 'System32\tar.exe'
 
         if (-not (Test-Path -LiteralPath $windowsTar)) {
-            throw "Windows native tar.exe not found: $windowsTar"
+            throw "Windows tar.exe not found: $windowsTar"
         }
 
         & $windowsTar -xf $archive -C $work
@@ -96,7 +213,10 @@ URL:      $($server.Url)
             throw "Server archive extraction failed for $($server.Name)"
         }
 
-        # Resolve extracted directories.
+        # ------------------------------------------------------------
+        # 4. Resolve executable paths.
+        # ------------------------------------------------------------
+
         $base = Join-Path $work "$($server.Name)-$($server.Version)-winx64"
         $data = Join-Path $work 'data'
         $bin = Join-Path $base 'bin'
@@ -105,29 +225,29 @@ URL:      $($server.Url)
             $directories = Get-ChildItem -LiteralPath $work -Directory |
                 Select-Object -ExpandProperty Name
 
-            throw "Server binaries directory not found: $bin. Extracted directories: $($directories -join ', ')"
+            throw "Server bin directory not found: $bin. Extracted directories: $($directories -join ', ')"
         }
 
-        $exe = if ($server.Name -eq 'mysql') {
-            Join-Path $bin 'mysqld.exe'
-        } else {
-            Join-Path $bin 'mariadbd.exe'
+        if ($server.Name -eq 'mysql') {
+            $exe = Join-Path $bin 'mysqld.exe'
+            $client = Join-Path $bin 'mysql.exe'
         }
-
-        $client = if ($server.Name -eq 'mysql') {
-            Join-Path $bin 'mysql.exe'
-        } else {
-            Join-Path $bin 'mariadb.exe'
+        else {
+            $exe = Join-Path $bin 'mariadbd.exe'
+            $client = Join-Path $bin 'mariadb.exe'
         }
 
         foreach ($binary in @($exe, $client)) {
             if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
-                throw "Required server executable not found: $binary"
+                throw "Required executable not found: $binary"
             }
         }
 
-        # Initialize disposable database.
-        Write-Host 'Initializing disposable database...'
+        # ------------------------------------------------------------
+        # 5. Initialize disposable database directory.
+        # ------------------------------------------------------------
+
+        Write-Host "Initializing $($server.Name) data directory..."
 
         if ($server.Name -eq 'mysql') {
             & $exe `
@@ -153,9 +273,13 @@ URL:      $($server.Url)
             throw "Disposable data directory initialization failed for $($server.Name)"
         }
 
-        # Prepare SQL fixture.
-        $init = Join-Path $work 'initialize.sql'
+        # ------------------------------------------------------------
+        # 6. Prepare SQL fixture.
+        # ------------------------------------------------------------
 
+        Write-Host 'Preparing SQL fixture...'
+
+        $init = Join-Path $work 'initialize.sql'
         $fixturePath = Join-Path $root 'tests/fixtures/mysql.sql'
 
         if (-not (Test-Path -LiteralPath $fixturePath)) {
@@ -183,14 +307,19 @@ USE kitsune_test;
             [Text.UTF8Encoding]::new($false)
         )
 
-        # Configure disposable database server.
+        # ------------------------------------------------------------
+        # 7. Configure server.
+        # ------------------------------------------------------------
+
+        Write-Host 'Creating server configuration...'
+
         $ini = Join-Path $work 'server.ini'
 
-        $tls = (Join-Path $fixture 'tls').Replace('\', '/')
-        $baseConfig = $base.Replace('\', '/')
-        $dataConfig = $data.Replace('\', '/')
-        $initConfig = $init.Replace('\', '/')
-        $workConfig = $work.Replace('\', '/')
+        $tls = Convert-ToConfigPath (Join-Path $fixture 'tls')
+        $baseConfig = Convert-ToConfigPath $base
+        $dataConfig = Convert-ToConfigPath $data
+        $initConfig = Convert-ToConfigPath $init
+        $workConfig = Convert-ToConfigPath $work
 
         @"
 [mysqld]
@@ -206,7 +335,10 @@ init-file=$initConfig
 log-error=$workConfig/server.log
 "@ | Set-Content -LiteralPath $ini -Encoding utf8
 
-        # Start disposable server.
+        # ------------------------------------------------------------
+        # 8. Start disposable database server.
+        # ------------------------------------------------------------
+
         Write-Host "Starting $($server.Name) on port $($server.Port)..."
 
         $process = Start-Process `
@@ -215,12 +347,21 @@ log-error=$workConfig/server.log
             -PassThru `
             -ErrorAction Stop
 
-        # Wait for SQL fixture to become available.
+        Write-Host "Started process PID: $($process.Id)"
+
+        # ------------------------------------------------------------
+        # 9. Wait for server readiness.
+        # ------------------------------------------------------------
+
+        Write-Host 'Waiting for SQL fixture readiness...'
+
         $ready = $false
+        $lastProbeError = ''
 
         $tlsArgs = if ($server.Name -eq 'mysql') {
             @('--ssl-mode=REQUIRED')
-        } else {
+        }
+        else {
             @('--ssl', '--disable-ssl-verify-server-cert')
         }
 
@@ -231,23 +372,45 @@ log-error=$workConfig/server.log
                 $process.Refresh()
 
                 if ($process.HasExited) {
-                    throw "Disposable server exited with code $($process.ExitCode)"
+                    Show-ServerLog -WorkDirectory $work
+
+                    throw "Disposable $($server.Name) server exited with code $($process.ExitCode)"
                 }
 
-                # Capture expected connection errors while the server starts.
-                $probeOutput = & $client `
-                    --no-defaults `
-                    --protocol=tcp `
-                    -h 127.0.0.1 `
-                    "--port=$($server.Port)" `
-                    -u kitsune_test `
-                    @tlsArgs `
-                    -N `
-                    -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1
+                # Temporarily permit native command errors so we can
+                # capture connection failures without terminating the script.
+                $previousErrorAction = $ErrorActionPreference
 
-                if ($LASTEXITCODE -eq 0) {
+                try {
+                    $ErrorActionPreference = 'Continue'
+
+                    $probeOutput = & $client `
+                        --no-defaults `
+                        --protocol=tcp `
+                        -h 127.0.0.1 `
+                        "--port=$($server.Port)" `
+                        -u kitsune_test `
+                        @tlsArgs `
+                        -N `
+                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1
+
+                    $probeExitCode = $LASTEXITCODE
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorAction
+                }
+
+                if ($probeExitCode -eq 0) {
                     $ready = $true
+                    Write-Host "SQL fixture ready after $($attempt + 1) attempts." -ForegroundColor Green
                     break
+                }
+
+                $lastProbeError = ($probeOutput | Out-String).Trim()
+
+                # Print the first failure, then every 10 attempts.
+                if ($attempt -eq 0 -or (($attempt + 1) % 10 -eq 0)) {
+                    Write-Warning "Readiness attempt $($attempt + 1)/60 failed: $lastProbeError"
                 }
 
                 Start-Sleep -Seconds 1
@@ -258,13 +421,16 @@ log-error=$workConfig/server.log
         }
 
         if (-not $ready) {
-            throw "Disposable $($server.Name) server did not initialize its fixture within 60 attempts"
+            Show-ServerLog -WorkDirectory $work
+
+            throw "Disposable $($server.Name) server did not initialize its fixture within 60 attempts. Last probe error: $lastProbeError"
         }
 
-        Write-Host "$($server.Name) is ready." -ForegroundColor Green
+        # ------------------------------------------------------------
+        # 10. Run Rust integration tests.
+        # ------------------------------------------------------------
 
-        # Run Rust integration tests.
-        Write-Host "Running $($server.Test)..."
+        Write-Host "Running integration test: $($server.Test)"
 
         & bun scripts/test-rust.ts `
             $server.Test `
@@ -280,51 +446,26 @@ log-error=$workConfig/server.log
         Write-Host "$($server.Name) integration tests passed." -ForegroundColor Green
     }
     finally {
-        # Always remove temporary credentials.
+        # ------------------------------------------------------------
+        # 11. Stop and clean up.
+        # ------------------------------------------------------------
+
         Remove-Item Env:MYSQL_PWD -ErrorAction SilentlyContinue
 
-        # Stop disposable server.
-        if ($null -ne $process) {
-            try {
-                $process.Refresh()
+        Stop-DisposableServer `
+            -ServerProcess $process `
+            -ServerName $server.Name
 
-                if (-not $process.HasExited) {
-                    Write-Host "Stopping $($server.Name)..."
+        Show-ServerLog -WorkDirectory $work -Tail 50
 
-                    Stop-Process `
-                        -Id $process.Id `
-                        -Force `
-                        -ErrorAction SilentlyContinue
+        Write-Host "Cleaning up $work..."
 
-                    $process.WaitForExit(10000) | Out-Null
-                }
-            }
-            finally {
-                $process.Dispose()
-            }
-        }
-
-        # Print last server log lines for diagnostics.
-        $serverLog = Join-Path $work 'server.log'
-
-        if (Test-Path -LiteralPath $serverLog) {
-            Write-Host "Last $($server.Name) server log lines:"
-
-            Get-Content -LiteralPath $serverLog -Tail 35
-        }
-
-        # Clean up isolated temporary directory.
-        if (Test-Path -LiteralPath $work) {
-            Write-Host "Cleaning up $work..."
-
-            Remove-Item `
-                -LiteralPath $work `
-                -Recurse `
-                -Force `
-                -ErrorAction Continue
-        }
+        Remove-DisposableDirectory `
+            -Directory $work `
+            -MaxAttempts 10
     }
 }
 
+Write-Host ''
 Write-Host 'All Windows database engine integration tests passed.' -ForegroundColor Green
 
