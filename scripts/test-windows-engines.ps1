@@ -359,6 +359,10 @@ log-error=$workConfig/server.log
         $lastProbeError = ''
 
         $tlsArgs = if ($server.Name -eq 'mysql') {
+            # PowerShell 7.3+ can interpret native stderr from mysql.exe as
+            # a terminating error under $ErrorActionPreference = 'Stop'.
+            # Suppress native stderr redirection for this probe so connection
+            # errors are captured and retried as intended.
             @('--ssl-mode=REQUIRED')
         }
         else {
@@ -392,7 +396,7 @@ log-error=$workConfig/server.log
                         -u kitsune_test `
                         @tlsArgs `
                         -N `
-                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1
+                        -e 'SELECT marker FROM kitsune_test.kitsune_fixture_identity' 2>&1 | Out-String
 
                     $probeExitCode = $LASTEXITCODE
                 }
