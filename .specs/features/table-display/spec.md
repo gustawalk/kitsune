@@ -57,3 +57,5 @@ Verification: standard (UI display and filter controls using existing read APIs)
 Step 1 complete: filter rendering tests (2 pass), typecheck and production build pass. Browser interactions follow in final verification.
 
 Step 2 complete: resolver/grid unit tests and browser fixture checks pass. Labels persist, raw copying/navigation and delayed page changes verified. Final independent review follows.
+
+Final visual refinement complete: a single condition and its actions share one wrapping row. Browser measurement is under 70px at 1533px viewport; grouped editing retains its full controls.

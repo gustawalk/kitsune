@@ -4353,3 +4353,20 @@ html {
 .grid-heading .reference-display-button {
   margin-right: 5px;
 }
+
+.filter-simple {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.filter-simple .filter-group,
+.filter-simple .filter-actions {
+  display: contents;
+}
+.filter-simple .filter-condition {
+  flex: 1 1 460px;
+  max-width: 720px;
+  margin: 0;
+  grid-template-columns: minmax(120px, 1fr) 100px minmax(120px, 2fr) 28px;
+}

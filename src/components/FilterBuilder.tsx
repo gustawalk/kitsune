@@ -165,7 +165,7 @@ export function FilterBuilder({
   }
   return (
     <div
-      className={`filter-builder ${draft.length <= 1 ? "filter-simple" : ""}`}
+      className={`filter-builder ${draft.length <= 1 && (draft[0]?.filters.length || 0) <= 1 ? "filter-simple" : ""}`}
     >
       {draft.map((group, g) => (
         <section className="filter-group" key={g}>
