@@ -394,6 +394,7 @@ log-error=$workConfig/server.log
 
                     $probeOutput = & $client `
                         --no-defaults `
+                        --no-login-paths `
                         --protocol=tcp `
                         -h 127.0.0.1 `
                         "--port=$($server.Port)" `
