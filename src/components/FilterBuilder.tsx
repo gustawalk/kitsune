@@ -164,67 +164,36 @@ export function FilterBuilder({
     }
   }
   return (
-    <div className="filter-builder">
-      <div className="filter-builder-toolbar">
-        <strong>Match groups</strong>
-        <Select
-          aria-label="Join filter groups"
-          value={join}
-          onValueChange={setJoin}
-        >
-          <SelectItem value="all">All (AND)</SelectItem>
-          <SelectItem value="any">Any (OR)</SelectItem>
-        </Select>
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={draft.length >= 16}
-          onClick={() =>
-            setDraft([...draft, { mode: "all", filters: [emptyCondition()] }])
-          }
-        >
-          <Plus size={12} />
-          Add group
-        </Button>
-        <Button size="sm" onClick={apply}>
-          Apply filters
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => {
-            setDraft([]);
-            onApply([], "all");
-          }}
-        >
-          Clear
-        </Button>
-      </div>
+    <div
+      className={`filter-builder ${draft.length <= 1 ? "filter-simple" : ""}`}
+    >
       {draft.map((group, g) => (
         <section className="filter-group" key={g}>
-          <div className="filter-builder-toolbar">
-            <span>Group {g + 1}</span>
-            <Select
-              aria-label={`Join conditions in group ${g + 1}`}
-              value={group.mode}
-              onValueChange={(value) =>
-                setDraft((old) =>
-                  old.map((v, i) => (i === g ? { ...v, mode: value } : v)),
-                )
-              }
-            >
-              <SelectItem value="all">All conditions</SelectItem>
-              <SelectItem value="any">Any condition</SelectItem>
-            </Select>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setDraft((old) => old.filter((_, i) => i !== g))}
-            >
-              <Trash2 size={12} />
-              Remove group
-            </Button>
-          </div>
+          {(draft.length > 1 || group.filters.length > 1) && (
+            <div className="filter-builder-toolbar">
+              {draft.length > 1 && <span>Group {g + 1}</span>}
+              <Select
+                aria-label={`Join conditions in group ${g + 1}`}
+                value={group.mode}
+                onValueChange={(value) =>
+                  setDraft((old) =>
+                    old.map((v, i) => (i === g ? { ...v, mode: value } : v)),
+                  )
+                }
+              >
+                <SelectItem value="all">All conditions</SelectItem>
+                <SelectItem value="any">Any condition</SelectItem>
+              </Select>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setDraft((old) => old.filter((_, i) => i !== g))}
+              >
+                <Trash2 size={12} />
+                Remove group
+              </Button>
+            </div>
+          )}
           {group.filters.map((f, i) => (
             <div className="filter-condition" key={i}>
               <Select
@@ -316,67 +285,115 @@ export function FilterBuilder({
         </section>
       ))}
       {error && <ErrorState error={error} />}
-      <div className="filter-builder-toolbar">
-        <input
-          aria-label="Saved filter name"
-          placeholder="Name this filter…"
-          maxLength={80}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+      <div className="filter-builder-toolbar filter-actions">
+        <Button size="sm" onClick={apply}>
+          Apply
+        </Button>
         <Button
           size="sm"
-          variant="secondary"
-          disabled={!name.trim()}
+          variant="ghost"
           onClick={() => {
-            try {
-              const groups = checked();
-              setPresets((old) =>
-                [
-                  ...old.filter((p) => p.name !== name.trim()),
-                  { name: name.trim(), groups, mode: join as "all" | "any" },
-                ].slice(-50),
-              );
-              setName("");
-              setError("");
-            } catch (e) {
-              setError(String(e));
-            }
+            setDraft([]);
+            onApply([], "all");
           }}
         >
-          <Save size={12} />
-          Save filter locally
+          Clear
         </Button>
-        <Select
-          aria-label="Load saved filter"
-          value=""
-          placeholder="Load saved filter"
-          onValueChange={(value) => {
-            const p = presets.find((p) => p.name === value);
-            if (p) {
-              setDraft(p.groups);
-              setJoin(p.mode);
-              onApply(p.groups, p.mode);
-            }
-          }}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={draft.length >= 16}
+          onClick={() =>
+            setDraft([...draft, { mode: "all", filters: [emptyCondition()] }])
+          }
         >
-          <SelectItem value="">Load saved filter</SelectItem>
-          {presets.map((p) => (
-            <SelectItem value={p.name} key={p.name}>
-              {p.name}
-            </SelectItem>
-          ))}
-        </Select>
-        {presets.length > 0 && (
-          <Button size="sm" variant="ghost" onClick={() => setPresets([])}>
-            Clear saved filters
-          </Button>
+          <Plus size={12} /> Add group
+        </Button>
+        {draft.length > 1 && (
+          <Select
+            aria-label="Join filter groups"
+            value={join}
+            onValueChange={setJoin}
+          >
+            <SelectItem value="all">All groups (AND)</SelectItem>
+            <SelectItem value="any">Any group (OR)</SelectItem>
+          </Select>
         )}
+        <details className="saved-filter-menu">
+          <summary>Saved filters</summary>
+          <div className="saved-filter-content">
+            <div className="filter-builder-toolbar">
+              <input
+                aria-label="Saved filter name"
+                placeholder="Name this filter…"
+                maxLength={80}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={!name.trim()}
+                onClick={() => {
+                  try {
+                    const groups = checked();
+                    setPresets((old) =>
+                      [
+                        ...old.filter((p) => p.name !== name.trim()),
+                        {
+                          name: name.trim(),
+                          groups,
+                          mode: join as "all" | "any",
+                        },
+                      ].slice(-50),
+                    );
+                    setName("");
+                    setError("");
+                  } catch (e) {
+                    setError(String(e));
+                  }
+                }}
+              >
+                <Save size={12} />
+                Save filter locally
+              </Button>
+              <Select
+                aria-label="Load saved filter"
+                value=""
+                placeholder="Load saved filter"
+                onValueChange={(value) => {
+                  const p = presets.find((p) => p.name === value);
+                  if (p) {
+                    setDraft(p.groups);
+                    setJoin(p.mode);
+                    onApply(p.groups, p.mode);
+                  }
+                }}
+              >
+                <SelectItem value="">Load saved filter</SelectItem>
+                {presets.map((p) => (
+                  <SelectItem value={p.name} key={p.name}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </Select>
+              {presets.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setPresets([])}
+                >
+                  Clear saved filters
+                </Button>
+              )}
+            </div>
+            <p className="muted small">
+              Saved filters can contain sensitive values. They stay in Kitsune’s
+              local metadata.
+            </p>
+          </div>
+        </details>
       </div>
-      <p className="muted small">
-        Saved filters can contain sensitive values. They stay in Kitsune’s local
-        metadata.
-      </p>
     </div>
   );
 }

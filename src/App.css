@@ -4286,3 +4286,35 @@ html {
   color: var(--danger, #ed806b);
   border-left: 3px solid currentColor;
 }
+
+/* Keep the common one-condition filter close to the grid. */
+.filter-builder {
+  padding: 8px 14px;
+}
+.filter-simple .filter-group {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.filter-condition {
+  grid-template-columns: minmax(140px, 220px) 125px minmax(120px, 360px) 28px;
+}
+.filter-actions {
+  margin: 4px 0 0;
+}
+.saved-filter-menu > summary {
+  cursor: pointer;
+  color: var(--muted);
+  padding: 6px;
+}
+.saved-filter-content {
+  padding: 10px 0 0;
+}
+.saved-filter-menu[open] {
+  flex-basis: 100%;
+}
+@media (max-width: 640px) {
+  .filter-condition {
+    grid-template-columns: minmax(80px, 1fr) 95px minmax(80px, 1fr) 28px;
+  }
+}

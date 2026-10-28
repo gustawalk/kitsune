@@ -5,7 +5,7 @@ import {
   type TableMutationKind,
 } from "../components/TableMutation";
 import { Select, SelectItem } from "../components/ui/select";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Eye,
   Download,
@@ -73,8 +73,15 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   const [sort, setSort] = useState(tab.sort || "");
   const [descending, setDescending] = useState(tab.descending || false);
   const [filters, setFilters] = useState<Filter[]>(tab.filters || []);
-  const [filtering, setFiltering] = useState(true);
+  const [filtering, setFiltering] = useState(false);
   const [filterGroups, setFilterGroups] = useState(tab.filterGroups || []);
+  const editorGroups = useMemo(
+    () => [
+      ...(filters.length ? [{ mode: "all", filters }] : []),
+      ...filterGroups,
+    ],
+    [filters, filterGroups],
+  );
   const [groupMode, setGroupMode] = useState(tab.groupMode || "all");
   const [rowCounts, setRowCounts] = useState<RowCounts>();
   const [countingRows, setCountingRows] = useState(false);
@@ -573,21 +580,23 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
         <FilterBuilder
           metadata={metadata.data}
           driver={connection?.driver || "sqlite"}
-          groups={filterGroups}
+          groups={editorGroups}
           mode={groupMode}
           onApply={(groups, mode) => {
+            setFilters([]);
             setFilterGroups(groups);
+            setFiltering(false);
             setGroupMode(mode);
             resetPaging();
           }}
           preferenceKey={`filters:${tab.connectionId}:${tab.table.schema}:${tab.table.name}`}
         />
       )}
-      {!!filters.length && (
+      {(!!filters.length || !!filterGroups.length) && (
         <div className="filter-chips">
           {filters.map((f, i) => (
             <button
-              key={i}
+              key={`legacy-${i}`}
               onClick={() => {
                 setFilters((fs) => fs.filter((_, n) => n !== i));
                 resetPaging();
@@ -595,6 +604,24 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             >
               {f.column} {f.operator}{" "}
               {"value" in f.value ? String(f.value.value).slice(0, 30) : "NULL"}
+              <X size={11} />
+            </button>
+          ))}
+          {filterGroups.map((group, g) => (
+            <button
+              key={g}
+              title="Remove filter group"
+              onClick={() => {
+                setFilterGroups((gs) => gs.filter((_, i) => i !== g));
+                resetPaging();
+              }}
+            >
+              {group.filters
+                .map(
+                  (f) =>
+                    `${f.column} ${f.operator} ${"value" in f.value ? String(f.value.value).slice(0, 30) : "NULL"}`,
+                )
+                .join(group.mode === "any" ? " OR " : " AND ")}
               <X size={11} />
             </button>
           ))}
