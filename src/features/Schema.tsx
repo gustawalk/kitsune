@@ -21,7 +21,6 @@ import {
   FileCode2,
   KeyRound,
   Network,
-  Paintbrush,
   PanelRight,
   RefreshCw,
   Search,
