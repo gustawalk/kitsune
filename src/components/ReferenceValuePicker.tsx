@@ -130,10 +130,11 @@ export function ReferenceValuePicker({
     <Dialog
       open
       onClose={onClose}
-      title={`Display ${column}`}
+      className="reference-display-dialog"
+      title="Display referenced value"
       description={
         relationship
-          ? `${relationship.to.schema ? `${relationship.to.schema}.` : ""}${relationship.to.name}`
+          ? `${column} → ${relationship.to.schema ? `${relationship.to.schema}.` : ""}${relationship.to.name}`
           : "Referenced record"
       }
     >
@@ -162,7 +163,7 @@ export function ReferenceValuePicker({
           </label>
         )}
         <label>
-          Show
+          Display column
           <Select
             aria-label="Display field"
             value={

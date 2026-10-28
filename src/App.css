@@ -4370,3 +4370,22 @@ html {
   margin: 0;
   grid-template-columns: minmax(120px, 1fr) 100px minmax(120px, 2fr) 28px;
 }
+
+.reference-display-dialog {
+  width: 360px;
+  padding: 20px;
+}
+.reference-display-dialog > header {
+  margin-bottom: 18px;
+}
+.reference-display-dialog > header p {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.reference-display-dialog .reference-value-picker {
+  padding: 0;
+}
+.reference-display-dialog .select-shell,
+.reference-display-dialog .select-trigger {
+  width: 100%;
+}
