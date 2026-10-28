@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, useRemote } from "../lib/api";
 import { useLayoutPreference } from "../lib/layout-preferences";
 import { relationshipKey, tableKey } from "../lib/schema";
 import {
-  loadReferenceLabels,
+  ReferenceLabelCache,
   referencePreferencesSchema,
-  type ReferenceLabels,
   type ReferencePreferences,
 } from "../lib/reference-values";
 import type { ForeignKey, Metadata, ResultSet } from "../lib/types";
@@ -26,31 +25,50 @@ export function useReferenceDisplay(
       referencePreferencesSchema,
       {},
     );
-  const [resolved, setResolved] = useState<{
-    source: ResultSet;
-    preferences: ReferencePreferences;
-    metadata: Metadata;
-    connectionId: string;
-    labels: ReferenceLabels;
-  }>();
+  const [, render] = useState(0);
+  const current = useRef<
+    | {
+        source: ResultSet;
+        metadata: Metadata;
+        connectionId: string;
+        cache: ReferenceLabelCache;
+      }
+    | undefined
+  >(undefined);
   useEffect(() => {
-    let alive = true;
-    if (enabled && source && metadata && Object.keys(preferences).length)
-      void loadReferenceLabels(
+    if (!enabled || !source || !metadata) {
+      current.current?.cache.dispose();
+      current.current = undefined;
+      return;
+    }
+    if (
+      current.current?.source !== source ||
+      current.current?.metadata !== metadata ||
+      current.current?.connectionId !== connectionId
+    ) {
+      current.current?.cache.dispose();
+      current.current = {
         source,
         metadata,
-        preferences,
         connectionId,
-        api,
-        () => alive,
-      ).then((labels) => {
-        if (alive)
-          setResolved({ source, preferences, metadata, connectionId, labels });
-      });
-    return () => {
-      alive = false;
-    };
+        cache: new ReferenceLabelCache(
+          source,
+          metadata,
+          connectionId,
+          api,
+          () => render((n) => n + 1),
+        ),
+      };
+    }
+    current.current.cache.update(preferences);
   }, [enabled, source, metadata, preferences, connectionId]);
+  useEffect(
+    () => () => {
+      current.current?.cache.dispose();
+      current.current = undefined;
+    },
+    [],
+  );
   const foreignKeys = useMemo(
     () =>
       new Map(
@@ -71,11 +89,10 @@ export function useReferenceDisplay(
     setPreferences,
     labels:
       enabled &&
-      resolved?.source === source &&
-      resolved?.preferences === preferences &&
-      resolved?.metadata === metadata &&
-      resolved?.connectionId === connectionId
-        ? resolved.labels
+      current.current?.source === source &&
+      current.current?.metadata === metadata &&
+      current.current?.connectionId === connectionId
+        ? current.current.cache.labels(preferences)
         : undefined,
   };
 }

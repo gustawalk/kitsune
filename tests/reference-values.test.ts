@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   loadReferenceLabels,
+  ReferenceLabelCache,
   referencePreferencesSchema,
 } from "../src/lib/reference-values";
 import { relationshipKey } from "../src/lib/schema";
@@ -296,4 +297,222 @@ test("wide composite keys stay within the 100-predicate limit", async () => {
         ),
       ),
   ).toEqual([99, 9]);
+});
+
+const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+test("configuring another FK preserves resolved labels and only reads the changed column", async () => {
+  const assigned: ForeignKey = {
+    ...fk,
+    name: "assignee",
+    columns: ["assignee_id"],
+    to: { ...target, name: "users" },
+  };
+  const meta = { ...metadata, foreignKeys: [fk, assigned] };
+  const source = result(["issue_id", "assignee_id"], [[text("a"), text("u")]]);
+  const calls: string[] = [];
+  let release!: (value: ResultSet) => void;
+  const pending = new Promise<ResultSet>((resolve) => {
+    release = resolve;
+  });
+  const read = async <T>(method: string, payload: any): Promise<T> => {
+    calls.push(`${method}:${payload.table.name}`);
+    if (method === "metadata") return targetMetadata as T;
+    return (
+      payload.table.name === "users"
+        ? await pending
+        : result(["id", "title"], [[text("a"), text("First")]])
+    ) as T;
+  };
+  const cache = new ReferenceLabelCache(
+    source,
+    meta,
+    "c",
+    read,
+    () => undefined,
+  );
+  cache.update(preference);
+  await settled();
+  expect(cache.labels(preference).get("issue_id")).toEqual(["First"]);
+  const both = {
+    ...preference,
+    assignee_id: { relationship: relationshipKey(assigned), column: "title" },
+  };
+  cache.update(both);
+  expect(cache.labels(both).get("issue_id")).toEqual(["First"]);
+  await settled();
+  expect(calls).toEqual([
+    "metadata:issues",
+    "browse:issues",
+    "metadata:users",
+    "browse:users",
+  ]);
+  expect(cache.labels(both).has("assignee_id")).toBe(false);
+  release(result(["id", "title"], [[text("u"), text("Assigned user")]]));
+  await settled();
+  expect([...cache.labels(both)]).toEqual([
+    ["issue_id", ["First"]],
+    ["assignee_id", ["Assigned user"]],
+  ]);
+  cache.update({ assignee_id: both.assignee_id });
+  expect([...cache.labels({ assignee_id: both.assignee_id })]).toEqual([
+    ["assignee_id", ["Assigned user"]],
+  ]);
+  expect(calls.length).toBe(4);
+  cache.dispose();
+});
+
+test("unchanged pending lookups are reused while another FK is configured", async () => {
+  const assigned: ForeignKey = {
+    ...fk,
+    name: "assignee",
+    columns: ["assignee_id"],
+  };
+  let release!: (value: ResultSet) => void;
+  const pending = new Promise<ResultSet>((resolve) => {
+    release = resolve;
+  });
+  let browses = 0;
+  const cache = new ReferenceLabelCache(
+    result(["issue_id", "assignee_id"], [[text("a"), text("a")]]),
+    { ...metadata, foreignKeys: [fk, assigned] },
+    "c",
+    async <T>(method: string): Promise<T> => {
+      if (method === "metadata") return targetMetadata as T;
+      browses++;
+      return (await pending) as T;
+    },
+    () => undefined,
+  );
+  cache.update(preference);
+  await settled();
+  const both = {
+    ...preference,
+    assignee_id: { relationship: relationshipKey(assigned), column: "title" },
+  };
+  cache.update(both);
+  await settled();
+  expect(browses).toBe(2);
+  release(result(["id", "title"], [[text("a"), text("Shared label")]]));
+  await settled();
+  expect([...cache.labels(both)]).toEqual([
+    ["issue_id", ["Shared label"]],
+    ["assignee_id", ["Shared label"]],
+  ]);
+  expect(browses).toBe(2);
+  cache.dispose();
+});
+
+test("changing a field rejects its old response while keeping the new label", async () => {
+  const releases: Array<(result: ResultSet) => void> = [];
+  const cache = new ReferenceLabelCache(
+    result(["issue_id"], [[text("a")]]),
+    metadata,
+    "c",
+    async <T>(method: string): Promise<T> => {
+      if (method === "metadata") return targetMetadata as T;
+      return (await new Promise<ResultSet>((resolve) =>
+        releases.push(resolve),
+      )) as T;
+    },
+    () => undefined,
+  );
+  cache.update(preference);
+  await settled();
+  const next = { issue_id: { ...preference.issue_id, column: "id" } };
+  cache.update(next);
+  await settled();
+  expect(releases.length).toBe(2);
+  releases[1](result(["id", "title"], [[text("a"), text("New")]]));
+  await settled();
+  expect(cache.labels(next).get("issue_id")).toEqual(["a"]);
+  releases[0](result(["id", "title"], [[text("a"), text("Old title")]]));
+  await settled();
+  expect(cache.labels(next).get("issue_id")).toEqual(["a"]);
+  cache.dispose();
+});
+
+test("disposed page caches never publish delayed labels", async () => {
+  let release!: (result: ResultSet) => void;
+  let published = 0;
+  const cache = new ReferenceLabelCache(
+    result(["issue_id"], [[text("a")]]),
+    metadata,
+    "c",
+    async <T>(method: string): Promise<T> => {
+      if (method === "metadata") return targetMetadata as T;
+      return (await new Promise<ResultSet>((resolve) => {
+        release = resolve;
+      })) as T;
+    },
+    () => published++,
+  );
+  cache.update(preference);
+  await settled();
+  cache.dispose();
+  release(result(["id", "title"], [[text("a"), text("Old page")]]));
+  await settled();
+  expect(cache.labels(preference).size).toBe(0);
+  expect(published).toBe(0);
+});
+
+test("each resolved batch updates its own rows without waiting for remaining rows", async () => {
+  const source = result(
+    ["issue_id"],
+    Array.from({ length: 20 }, (_, i) => [text(String(i))]),
+  );
+  let release!: (result: ResultSet) => void;
+  const remaining = new Promise<ResultSet>((resolve) => {
+    release = resolve;
+  });
+  let browseCount = 0;
+  let updates = 0;
+  const cache = new ReferenceLabelCache(
+    source,
+    metadata,
+    "c",
+    async <T>(method: string): Promise<T> => {
+      if (method === "metadata") return targetMetadata as T;
+      browseCount++;
+      return (
+        browseCount === 1
+          ? result(
+              ["id", "title"],
+              Array.from({ length: 16 }, (_, i) => [
+                text(String(i)),
+                text(`Issue ${i}`),
+              ]),
+            )
+          : await remaining
+      ) as T;
+    },
+    () => updates++,
+  );
+  cache.update(preference);
+  await settled();
+  expect(cache.labels(preference).get("issue_id")).toEqual([
+    ...Array.from({ length: 16 }, (_, i) => `Issue ${i}`),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  expect(updates).toBe(1);
+  expect(source.rows[19]).toEqual([text("19")]);
+  release(
+    result(
+      ["id", "title"],
+      Array.from({ length: 4 }, (_, i) => [
+        text(String(i + 16)),
+        text(`Issue ${i + 16}`),
+      ]),
+    ),
+  );
+  await settled();
+  expect(cache.labels(preference).get("issue_id")).toEqual(
+    Array.from({ length: 20 }, (_, i) => `Issue ${i}`),
+  );
+  expect(browseCount).toBe(2);
+  expect(updates).toBe(2);
+  cache.dispose();
 });

@@ -34,6 +34,7 @@ export async function loadReferenceLabels(
   connectionId: string,
   read: Read,
   active = () => true,
+  onProgress?: (column: string, labels: Array<string | undefined>) => void,
 ): Promise<ReferenceLabels> {
   const labels: ReferenceLabels = new Map();
   const keys = new Map<ForeignKey, Array<[string, string]>>();
@@ -109,6 +110,14 @@ export async function loadReferenceLabels(
           }
           found.set(tupleKey(key), record);
         }
+        if (active() && onProgress)
+          for (const [column, field] of fields)
+            onProgress(
+              column,
+              sourceKeys.map((key) =>
+                key ? found.get(tupleKey(key))?.get(field) : undefined,
+              ),
+            );
       }
       if (active())
         for (const [column, field] of fields)
@@ -123,4 +132,74 @@ export async function loadReferenceLabels(
     }
   }
   return labels;
+}
+
+// One cache per table page. A selection change only invalidates its own column.
+export class ReferenceLabelCache {
+  private entries = new Map<
+    string,
+    {
+      signature: string;
+      labels?: Array<string | undefined>;
+    }
+  >();
+  private disposed = false;
+
+  constructor(
+    private source: ResultSet,
+    private metadata: Metadata,
+    private connectionId: string,
+    private read: Read,
+    private onChange: () => void,
+  ) {}
+
+  update(preferences: ReferencePreferences) {
+    if (this.disposed) return;
+    for (const [column, entry] of this.entries) {
+      if (entry.signature !== JSON.stringify(preferences[column]))
+        this.entries.delete(column);
+    }
+    for (const [column, preference] of Object.entries(preferences)) {
+      if (this.entries.has(column)) continue;
+      const entry = {
+        signature: JSON.stringify(preference),
+        labels: undefined as Array<string | undefined> | undefined,
+      };
+      this.entries.set(column, entry);
+      const active = () => !this.disposed && this.entries.get(column) === entry;
+      void loadReferenceLabels(
+        this.source,
+        this.metadata,
+        { [column]: preference },
+        this.connectionId,
+        this.read,
+        active,
+        (_, labels) => {
+          if (!active()) return;
+          entry.labels = labels;
+          this.onChange();
+        },
+      ).then((labels) => {
+        if (!active() || entry.labels !== undefined) return;
+        entry.labels = labels.get(column);
+        this.onChange();
+      });
+    }
+  }
+
+  labels(preferences: ReferencePreferences): ReferenceLabels {
+    const labels: ReferenceLabels = new Map();
+    if (this.disposed) return labels;
+    for (const [column, preference] of Object.entries(preferences)) {
+      const entry = this.entries.get(column);
+      if (entry?.signature === JSON.stringify(preference) && entry.labels)
+        labels.set(column, entry.labels);
+    }
+    return labels;
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.entries.clear();
+  }
 }
