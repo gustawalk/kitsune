@@ -4389,3 +4389,88 @@ html {
 .reference-display-dialog .select-trigger {
   width: 100%;
 }
+.reference-display-dialog {
+  width: 340px;
+  padding: 18px;
+}
+.reference-display-dialog > header {
+  margin-bottom: 14px;
+}
+.reference-display-dialog > header h2 {
+  font-size: 15px;
+}
+.reference-display-dialog > header p {
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.reference-display-dialog .reference-value-picker {
+  gap: 10px;
+}
+.reference-field-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--muted);
+}
+.reference-field-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 8px 0;
+  outline: none;
+}
+.reference-field-search:focus-within {
+  border-color: var(--accent);
+}
+.reference-field-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 12px;
+}
+.reference-field-option > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.reference-field-option small,
+.reference-field-option code {
+  color: var(--muted);
+  font-size: 10px;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reference-field-option:hover,
+.reference-field-option:focus-visible {
+  background: var(--surface-raised);
+}
+.reference-field-option.selected {
+  background: var(--selection);
+}
+.reference-field-option.selected > svg {
+  color: var(--accent);
+}
+.reference-original {
+  margin-bottom: 5px;
+}
+.reference-field-list {
+  border-top: 1px solid var(--border);
+  padding-top: 5px;
+  max-height: 238px;
+  overflow-y: auto;
+}
+.reference-no-fields {
+  padding: 14px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}

@@ -49,4 +49,4 @@ Verification: full (asynchronous request lifecycle and cancellation).
 | --- | --- | --- |
 | REF-01 | Independent completed and pending columns | Verified |
 | REF-02 | Scope cancellation and progressive rows | Verified |
-| REF-03 | Minimal direct field selection | Implementing |
+| REF-03 | Minimal direct field selection | Verified |

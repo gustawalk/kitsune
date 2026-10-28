@@ -1,3 +1,4 @@
+import { Check, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, useRemote } from "../lib/api";
 import { useLayoutPreference } from "../lib/layout-preferences";
@@ -121,6 +122,7 @@ export function ReferenceValuePicker({
       choices.find((fk) => relationshipKey(fk) === preference?.relationship) ||
       choices[0],
   );
+  const [search, setSearch] = useState("");
   const target = useRemote<Metadata>(
     "metadata",
     { connectionId, table: relationship?.to },
@@ -143,12 +145,22 @@ export function ReferenceValuePicker({
     );
     onClose();
   }
+  const fields =
+    target.data &&
+    relationship &&
+    tableKey(target.data.table) === tableKey(relationship.to)
+      ? target.data.columns
+      : [];
+  const selected =
+    relationship && preference?.relationship === relationshipKey(relationship)
+      ? preference.column
+      : "";
   return (
     <Dialog
       open
       onClose={onClose}
       className="reference-display-dialog"
-      title="Display referenced value"
+      title="Display value"
       description={
         relationship
           ? `${column} → ${relationship.to.schema ? `${relationship.to.schema}.` : ""}${relationship.to.name}`
@@ -162,48 +174,75 @@ export function ReferenceValuePicker({
             <Select
               aria-label="Referenced table"
               value={relationship ? relationshipKey(relationship) : ""}
-              onValueChange={(value) =>
+              onValueChange={(value) => {
                 setRelationship(
                   choices.find((fk) => relationshipKey(fk) === value),
-                )
-              }
+                );
+                setSearch("");
+              }}
             >
               {choices.map((fk) => (
                 <SelectItem
                   key={relationshipKey(fk)}
                   value={relationshipKey(fk)}
                 >
-                  {fk.to.schema}.{fk.to.name} · {fk.name}
+                  {fk.to.schema ? `${fk.to.schema}.` : ""}
+                  {fk.to.name} · {fk.name}
                 </SelectItem>
               ))}
             </Select>
           </label>
         )}
-        <label>
-          Display column
-          <Select
-            aria-label="Display field"
-            value={
-              relationship &&
-              preference?.relationship === relationshipKey(relationship)
-                ? preference.column
-                : ""
-            }
-            onValueChange={choose}
+        {fields.length > 6 && (
+          <div className="reference-field-search">
+            <Search size={14} />
+            <input
+              aria-label="Find a display field"
+              placeholder="Find a field…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        )}
+        <div
+          className="reference-field-options"
+          role="group"
+          aria-label="Display field"
+        >
+          <button
+            type="button"
+            className={`reference-field-option reference-original ${!selected ? "selected" : ""}`}
+            aria-pressed={!selected}
+            onClick={() => choose("")}
           >
-            <SelectItem value="">Original value</SelectItem>
-            {(target.data &&
-            relationship &&
-            tableKey(target.data.table) === tableKey(relationship.to)
-              ? target.data.columns
-              : []
-            ).map((field) => (
-              <SelectItem key={field.name} value={field.name}>
-                {field.name}
-              </SelectItem>
-            ))}
-          </Select>
-        </label>
+            <span>Original value</span>
+            <code>{column}</code>
+            {!selected && <Check size={14} />}
+          </button>
+          <div className="reference-field-list">
+            {fields
+              .filter((field) =>
+                field.name.toLowerCase().includes(search.trim().toLowerCase()),
+              )
+              .map((field) => (
+                <button
+                  key={field.name}
+                  type="button"
+                  className={`reference-field-option ${selected === field.name ? "selected" : ""}`}
+                  aria-pressed={selected === field.name}
+                  onClick={() => choose(field.name)}
+                >
+                  <span>{field.name}</span>
+                  <small>{field.dataType}</small>
+                  {selected === field.name && <Check size={14} />}
+                </button>
+              ))}
+            {!!fields.length &&
+              !fields.some((field) =>
+                field.name.toLowerCase().includes(search.trim().toLowerCase()),
+              ) && <p className="reference-no-fields">No matching fields</p>}
+          </div>
+        </div>
         {target.loading && !target.data && <Loading label="Loading fields…" />}
         {target.error && (
           <ErrorState
