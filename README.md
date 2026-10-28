@@ -14,6 +14,7 @@ Built with Tauri 2, Rust, React, and TypeScript. Database connections, credentia
 - **Explore:** searchable schema catalog, table structure, indexes, composite keys, and a focused or database-wide relationship diagram.
 - **Browse and edit:** server-side pagination, filters, sorting, column controls, cell editing, row insertion, and reviewed bulk updates/deletes. Editing requires a reliable row identity and supported transactional tables.
 - **Write SQL:** CodeMirror editor, metadata completion, multiple result sets, query history, saved queries, cancellation, and execution timing. A separate portable SELECT builder previews translations between dialects before opening native SQL.
+- **Referenced values:** hover a foreign-key column header and use its link button to choose a field from the referenced table. Labels apply to the whole page and the choice is saved locally. Choose **Original value** to restore IDs; copying, sorting, editing, and navigation use the original keys.
 - **Investigate:** start with a record and lazily expand declared incoming/outgoing foreign keys. Save references and graph positions locally.
 - **Observe:** record, bounded-table, and read-only query watches, with pause/resume, backoff, exclusions, and configurable capture/retention.
 - **Review:** Time Machine shows captured before/after fields. Eligible SQLite, PostgreSQL, and MySQL/MariaDB events can generate a reviewed, conflict-checked inverse operation.

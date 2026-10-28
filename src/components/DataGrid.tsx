@@ -1,3 +1,4 @@
+import type { ReferenceLabels } from "../lib/reference-values";
 import { ContextMenu } from "radix-ui";
 import {
   columnPreferenceKeys,
@@ -15,6 +16,7 @@ import {
   Braces,
   Check,
   Columns3,
+  Link2,
   Copy,
   Search,
   Pencil,
@@ -42,6 +44,9 @@ interface Props {
   onEdit?: (row: DbValue[], column: string, value: DbValue) => void;
   onRow?: (row: DbValue[]) => void;
   foreignKeys?: ForeignKey[];
+  referenceLabels?: ReferenceLabels;
+  referenceForeignKeys?: ReadonlyMap<string, ForeignKey>;
+  onReferenceDisplay?: (column: string) => void;
   onForeignKey?: (key: ForeignKey, row: DbValue[]) => void;
   selected?: number;
   onSort?: (column: string) => void;
@@ -61,6 +66,9 @@ export function DataGrid({
   onSelectionChange,
   onRow,
   foreignKeys,
+  referenceLabels,
+  referenceForeignKeys,
+  onReferenceDisplay,
   onForeignKey,
   onEdit,
   selected,
@@ -462,6 +470,20 @@ export function DataGrid({
                       ))}
                   </button>
                 </Tooltip>
+                {onReferenceDisplay &&
+                  foreignKeys?.some((fk) =>
+                    fk.columns.includes(result.columns[i]),
+                  ) && (
+                    <button
+                      type="button"
+                      className={`reference-display-button ${referenceForeignKeys?.has(result.columns[i]) ? "active" : ""}`}
+                      aria-label={`Display referenced value for ${result.columns[i]}`}
+                      title="Display referenced value"
+                      onClick={() => onReferenceDisplay(result.columns[i])}
+                    >
+                      <Link2 size={12} />
+                    </button>
+                  )}
                 <span
                   className="column-resize"
                   onPointerDown={(e) => resize(i, e)}
@@ -525,6 +547,9 @@ export function DataGrid({
                   </div>
                   {cols.map((col, c) => {
                     const v = row[col];
+                    const referenceLabel = referenceLabels?.get(
+                      result.columns[col],
+                    )?.[r];
                     const active =
                       r >= Math.min(cell[0], anchor[0]) &&
                       r <= Math.max(cell[0], anchor[0]) &&
@@ -574,12 +599,22 @@ export function DataGrid({
                                   type="button"
                                   className="foreign-key-value"
                                   disabled={v.kind === "null"}
-                                  title="Open the referenced record"
+                                  title={
+                                    referenceLabel !== undefined
+                                      ? `${referenceLabel} · ${display(v)} · Open referenced record`
+                                      : "Open the referenced record"
+                                  }
                                   onClick={(event) => {
                                     event.stopPropagation();
-                                    const key = foreignKeys.find((fk) =>
-                                      fk.columns.includes(result.columns[col]),
-                                    );
+                                    const key =
+                                      referenceForeignKeys?.get(
+                                        result.columns[col],
+                                      ) ??
+                                      foreignKeys.find((fk) =>
+                                        fk.columns.includes(
+                                          result.columns[col],
+                                        ),
+                                      );
                                     if (
                                       key &&
                                       key.columns.every((name) => {
@@ -594,7 +629,7 @@ export function DataGrid({
                                       onForeignKey(key, row);
                                   }}
                                 >
-                                  {display(v).slice(0, 240)}
+                                  {(referenceLabel ?? display(v)).slice(0, 240)}
                                 </button>
                               ) : (
                                 display(v).slice(0, 240)

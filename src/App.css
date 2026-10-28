@@ -4318,3 +4318,38 @@ html {
     grid-template-columns: minmax(80px, 1fr) 95px minmax(80px, 1fr) 28px;
   }
 }
+.grid-heading .reference-display-button {
+  flex: 0 0 22px;
+  width: 22px;
+  padding: 0;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0;
+}
+.grid-heading:hover .reference-display-button,
+.grid-heading:focus-within .reference-display-button,
+.grid-heading .reference-display-button.active {
+  opacity: 1;
+}
+.grid-heading .reference-display-button.active {
+  color: var(--accent);
+}
+.reference-value-picker {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0;
+}
+.reference-value-picker label {
+  display: grid;
+  gap: 6px;
+}
+.grid-heading {
+  display: flex;
+}
+.grid-heading > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.grid-heading .reference-display-button {
+  margin-right: 5px;
+}

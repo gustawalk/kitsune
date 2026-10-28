@@ -51,7 +51,9 @@ Verification: standard (UI display and filter controls using existing read APIs)
 | ID | Requirement | Status |
 | --- | --- | --- |
 | TABLE-01 | Compact filters, grouping, chips | Verified |
-| TABLE-02 | Referenced display and raw-value behavior | Implementing |
-| TABLE-03 | Preferences, batching, composite keys, fallbacks | Implementing |
+| TABLE-02 | Referenced display and raw-value behavior | Verified |
+| TABLE-03 | Preferences, batching, composite keys, fallbacks | Verified |
 
 Step 1 complete: filter rendering tests (2 pass), typecheck and production build pass. Browser interactions follow in final verification.
+
+Step 2 complete: resolver/grid unit tests and browser fixture checks pass. Labels persist, raw copying/navigation and delayed page changes verified. Final independent review follows.

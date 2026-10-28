@@ -1,3 +1,7 @@
+import {
+  ReferenceValuePicker,
+  useReferenceDisplay,
+} from "../components/ReferenceValuePicker";
 import { ExportTable } from "../components/ExportTable";
 import { FilterBuilder } from "../components/FilterBuilder";
 import {
@@ -83,6 +87,9 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
     [filters, filterGroups],
   );
   const [groupMode, setGroupMode] = useState(tab.groupMode || "all");
+  const filterCount =
+    filters.length +
+    filterGroups.reduce((count, group) => count + group.filters.length, 0);
   const [rowCounts, setRowCounts] = useState<RowCounts>();
   const [countingRows, setCountingRows] = useState(false);
   const [rowEstimate, setRowEstimate] = useState<RowEstimate>();
@@ -138,6 +145,14 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
     connected && workspace.activeTab === tab.id && tab.kind === "table",
     0,
     true,
+  );
+  const [referenceColumn, setReferenceColumn] = useState<string>();
+  const referenceDisplay = useReferenceDisplay(
+    `reference-display:${JSON.stringify([tab.connectionId, tab.table?.schema, tab.table?.name])}`,
+    tab.connectionId || "",
+    rows.loading ? undefined : rows.data,
+    metadata.data,
+    connected && workspace.activeTab === tab.id && tab.kind === "table",
   );
   const selectedIndices =
     selection?.result === rows.data ? selection?.indices || [] : [];
@@ -372,6 +387,17 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           </div>
         )}
       </Dialog>
+      {referenceColumn && metadata.data && (
+        <ReferenceValuePicker
+          key={referenceColumn}
+          column={referenceColumn}
+          foreignKeys={metadata.data.foreignKeys}
+          connectionId={tab.connectionId || ""}
+          preferences={referenceDisplay.preferences}
+          onChange={referenceDisplay.setPreferences}
+          onClose={() => setReferenceColumn(undefined)}
+        />
+      )}
       {exporting && metadata.data && (
         <ExportTable
           metadata={metadata.data}
@@ -522,7 +548,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               onClick={() => setFiltering((v) => !v)}
             >
               <FilterIcon size={14} />
-              Filter{filters.length ? ` (${filters.length})` : ""}
+              Filter{filterCount ? ` (${filterCount})` : ""}
             </Button>
             <Button
               variant="ghost"
@@ -738,6 +764,9 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               <DataGrid
                 result={rows.data}
                 foreignKeys={metadata.data?.foreignKeys}
+                referenceLabels={referenceDisplay.labels}
+                referenceForeignKeys={referenceDisplay.foreignKeys}
+                onReferenceDisplay={setReferenceColumn}
                 onForeignKey={(foreignKey, row) => {
                   const filters = foreignKey.columns.map((column, index) => ({
                     column: foreignKey.targetColumns[index],

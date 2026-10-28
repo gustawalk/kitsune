@@ -1,0 +1,48 @@
+import { expect, test } from "bun:test";
+import { renderToString } from "react-dom/server";
+import { DataGrid } from "../src/components/DataGrid";
+import type { ForeignKey, ResultSet } from "../src/lib/types";
+
+test("FK labels are display-only and original IDs remain available in the cell", () => {
+  const table = { schema: "main", name: "events", kind: "table" };
+  const key: ForeignKey = {
+    name: "issue",
+    from: table,
+    to: { ...table, name: "issues" },
+    columns: ["issue_id"],
+    targetColumns: ["id"],
+  };
+  const result: ResultSet = {
+    columns: ["issue_id"],
+    types: ["text"],
+    rows: [[{ kind: "text", value: "raw-id" }]],
+    affected: 0,
+    durationMs: 0,
+    truncated: false,
+    nextCursor: null,
+    keysetSupported: false,
+  };
+  const render = (labels?: Map<string, Array<string | undefined>>) =>
+    renderToString(
+      <DataGrid
+        result={result}
+        foreignKeys={[key]}
+        referenceLabels={labels}
+        onForeignKey={() => undefined}
+        onReferenceDisplay={() => undefined}
+      />,
+    );
+  const labeled = render(new Map([["issue_id", ["Issue title"]]]));
+  expect(labeled).toContain(
+    'title="Issue title · raw-id · Open referenced record"',
+  );
+  expect(labeled).toContain(">Issue title</button>");
+  expect(labeled).toContain(
+    'aria-label="Display referenced value for issue_id"',
+  );
+  expect(render()).toContain(">raw-id</button>");
+  expect(render(new Map([["issue_id", [undefined]]]))).toContain(
+    ">raw-id</button>",
+  );
+  expect(result.rows[0][0]).toEqual({ kind: "text", value: "raw-id" });
+});
