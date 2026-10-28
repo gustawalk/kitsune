@@ -32,7 +32,7 @@ Acceptance Criteria:
 
 Acceptance Criteria:
 1. WHEN connection settings open, the user SHALL be able to choose a preset, choose a custom color, or restore Default, with the current choice marked.
-2. WHEN a connection color is configured, every tab for that connection SHALL show a matching thin top accent and icon/active color; other connections and uncolored tabs SHALL retain their own appearance.
+2. WHEN a connection color is configured, every tab for that connection SHALL show a matching thin top accent and icon/active color and its sidebar database icon SHALL use that color; other connections and uncolored tabs SHALL retain their own appearance.
 3. WHEN settings are reopened after saving, the chosen color SHALL be selected; restoring Default SHALL remove the custom tab accents.
 4. WHEN a swatch is hovered or focused, it SHALL retain its fill and show a clean, single focus/selection treatment.
 

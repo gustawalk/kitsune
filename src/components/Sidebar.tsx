@@ -152,7 +152,10 @@ export function Sidebar({
               <span
                 className={`connection-dot ${workspace.activeConnections.includes(c.id) ? "online" : ""} ${c.environment === "production" ? "production" : ""}`}
               />
-              <Database size={15} />
+              <Database
+                size={15}
+                style={c.color ? { color: c.color } : undefined}
+              />
               <span>{c.name}</span>
               <span className={`environment environment-${c.environment}`}>
                 {c.environment === "development"
