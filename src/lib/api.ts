@@ -48,6 +48,22 @@ function cacheValue(key: string, value: unknown) {
         if (bytes > 3 * 1024 * 1024) return;
       }
     }
+  } else if (key.startsWith("record:")) {
+    // Record fields can contain very large JSON/text strings. Estimate without
+    // duplicating those strings through JSON.stringify on the UI thread.
+    bytes = 0;
+    const pending: unknown[] = [value];
+    while (pending.length) {
+      const item = pending.pop();
+      if (typeof item === "string") bytes += item.length * 2;
+      else if (item && typeof item === "object") {
+        for (const [name, child] of Object.entries(item)) {
+          bytes += name.length * 2 + 16;
+          pending.push(child);
+        }
+      } else bytes += 16;
+      if (bytes > 3 * 1024 * 1024) return;
+    }
   } else {
     try {
       bytes = JSON.stringify(value).length * 2;
@@ -103,9 +119,27 @@ export function useRemote<T>(
   enabled = true,
   interval = 0,
   retainWhenDisabled = false,
+  retainScope?: string,
 ) {
   const key = `${method}:${JSON.stringify(payload)}`;
-  const [data, setData] = useState<T>();
+  const [stored, setStored] = useState<{
+    key: string;
+    scope?: string;
+    value: T;
+  }>();
+  const data =
+    stored &&
+    (stored.key === key ||
+      (retainScope !== undefined && stored.scope === retainScope))
+      ? stored.value
+      : undefined;
+  const setData = useCallback(
+    (value: T | undefined) =>
+      setStored(
+        value === undefined ? undefined : { key, scope: retainScope, value },
+      ),
+    [key, retainScope],
+  );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const version = useRef(0);
@@ -155,18 +189,21 @@ export function useRemote<T>(
         if (version.current === n) setLoading(false);
       }
     },
-    [key, method, enabled],
+    [key, method, enabled, setData],
   );
   useEffect(() => {
-    if (enabled) setData(cache.get(key) as T | undefined);
-    else if (!retainWhenDisabled) setData(undefined);
+    if (enabled) {
+      const cached = freshCached<T>(key);
+      if (cached !== undefined) setData(cached);
+      else if (retainScope === undefined) setData(undefined);
+    } else if (!retainWhenDisabled) setData(undefined);
     if (enabled) void refresh(false);
     else setLoading(false);
     return () => {
       version.current++;
       running.current = null;
     };
-  }, [key, enabled, refresh]);
+  }, [key, enabled, refresh, retainScope, setData]);
   useEffect(() => {
     if (!interval || !enabled) return;
     const id = window.setInterval(() => void refresh(false), interval);
@@ -179,7 +216,13 @@ export function useRemote<T>(
     window.addEventListener("kitsune:invalidate", listener);
     return () => window.removeEventListener("kitsune:invalidate", listener);
   }, [key, refresh]);
-  return { data, error, loading, refresh };
+  return {
+    data,
+    error,
+    loading,
+    refresh,
+    stale: stored !== undefined && stored.key !== key,
+  };
 }
 export async function copy(text: string) {
   await navigator.clipboard.writeText(text);

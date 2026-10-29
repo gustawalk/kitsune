@@ -35,7 +35,17 @@ const listeners = new Set<() => void>();
 export function update(
   value: Partial<Workspace> | ((s: Workspace) => Partial<Workspace>),
 ) {
-  state = { ...state, ...(typeof value === "function" ? value(state) : value) };
+  const next = typeof value === "function" ? value(state) : value;
+  if (
+    Object.keys(next).every((key) => {
+      const field = key as keyof Workspace;
+      return field === "inspector"
+        ? JSON.stringify(next.inspector) === JSON.stringify(state.inspector)
+        : next[field] === state[field];
+    })
+  )
+    return;
+  state = { ...state, ...next };
   listeners.forEach((l) => l());
 }
 export function useWorkspace() {

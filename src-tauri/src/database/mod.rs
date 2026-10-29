@@ -28,6 +28,8 @@ enum Driver {
 pub struct Database {
     driver: Driver,
     metadata_cache: BTreeMap<TableRef, (Instant, usize, Metadata)>,
+    incoming_cache: BTreeMap<TableRef, (Instant, usize, Vec<ForeignKey>)>,
+    incoming_cache_bytes: usize,
     tables_cache: Option<(Instant, Vec<TableRef>)>,
     metadata_cache_bytes: usize,
     restore_cache: BTreeMap<TableRef, (Instant, String)>,
@@ -53,6 +55,8 @@ impl Database {
         Self {
             driver,
             metadata_cache: BTreeMap::new(),
+            incoming_cache: BTreeMap::new(),
+            incoming_cache_bytes: 0,
             tables_cache: None,
             metadata_cache_bytes: 0,
             restore_cache: BTreeMap::new(),
@@ -61,6 +65,8 @@ impl Database {
     pub fn refresh_metadata(&mut self) {
         self.restore_cache.clear();
         self.metadata_cache.clear();
+        self.incoming_cache.clear();
+        self.incoming_cache_bytes = 0;
         self.metadata_cache_bytes = 0;
         self.tables_cache = None;
     }
@@ -637,6 +643,46 @@ impl Database {
         })
     }
     pub fn incoming_foreign_keys(
+        &mut self,
+        table: &TableRef,
+        metadata: &Metadata,
+    ) -> Result<Vec<ForeignKey>, Error> {
+        if let Some((time, _, keys)) = self.incoming_cache.get(table)
+            && time.elapsed() < Duration::from_secs(60)
+        {
+            return Ok(keys.clone());
+        }
+        let keys = self.load_incoming_foreign_keys(table, metadata)?;
+        let size = serde_json::to_vec(&keys)
+            .map(|v| v.len())
+            .unwrap_or(usize::MAX);
+        if let Some((_, bytes, _)) = self.incoming_cache.remove(table) {
+            self.incoming_cache_bytes = self.incoming_cache_bytes.saturating_sub(bytes);
+        }
+        if size <= 16 * 1024 * 1024 {
+            while self.incoming_cache.len() >= 256
+                || self.incoming_cache_bytes.saturating_add(size) > 16 * 1024 * 1024
+            {
+                let oldest = self
+                    .incoming_cache
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.0)
+                    .map(|(key, _)| key.clone());
+                if let Some(oldest) = oldest {
+                    if let Some((_, bytes, _)) = self.incoming_cache.remove(&oldest) {
+                        self.incoming_cache_bytes = self.incoming_cache_bytes.saturating_sub(bytes);
+                    }
+                } else {
+                    break;
+                }
+            }
+            self.incoming_cache_bytes += size;
+            self.incoming_cache
+                .insert(table.clone(), (Instant::now(), size, keys.clone()));
+        }
+        Ok(keys)
+    }
+    fn load_incoming_foreign_keys(
         &mut self,
         table: &TableRef,
         metadata: &Metadata,

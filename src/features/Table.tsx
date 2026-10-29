@@ -127,7 +127,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   );
   const keysetRequested = keysetMode && !sort;
   const pageCursor = keysetRequested ? (cursorPages[cursorPage] ?? null) : null;
-  const rows = useRemote<ResultSet>(
+  const remoteRows = useRemote<ResultSet>(
     "browse",
     {
       connectionId: tab.connectionId,
@@ -145,7 +145,12 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
     connected && workspace.activeTab === tab.id && tab.kind === "table",
     0,
     true,
+    `table:${tab.connectionId}:${tab.table?.schema}:${tab.table?.name}`,
   );
+  const rows = {
+    ...remoteRows,
+    loading: remoteRows.loading || remoteRows.stale,
+  };
   const [referenceColumn, setReferenceColumn] = useState<string>();
   const referenceDisplay = useReferenceDisplay(
     `reference-display:${JSON.stringify([tab.connectionId, tab.table?.schema, tab.table?.name])}`,
@@ -467,7 +472,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             void metadata.refresh();
           }}
         >
-          <RefreshCw size={14} className={rows.loading ? "spin" : ""} />
+          <RefreshCw size={14} className={remoteRows.loading ? "spin" : ""} />
           Refresh
         </Button>
       </div>
@@ -763,6 +768,8 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
             rows.data && (
               <DataGrid
                 result={rows.data}
+                busy={rows.loading}
+                resetScrollKey={`${sort}:${descending}`}
                 foreignKeys={metadata.data?.foreignKeys}
                 referenceLabels={referenceDisplay.labels}
                 referenceForeignKeys={referenceDisplay.foreignKeys}
@@ -962,16 +969,18 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           )}
           <div className="pagination">
             <span className="muted">
-              {rows.loading
-                ? "Refreshing…"
-                : rows.data
-                  ? rowCounts
-                    ? `${rows.data.rows.length.toLocaleString()} displayed / ${rowCounts.matching.toLocaleString()} matching / ${rowCounts.total.toLocaleString()} total rows · exact · ${rows.data.durationMs} ms`
-                    : rowEstimate?.total !== undefined &&
-                        rowEstimate.total !== null
-                      ? `${rows.data.rows.length.toLocaleString()} displayed · ~${rowEstimate.total.toLocaleString()} estimated total rows · ${rows.data.durationMs} ms`
-                      : `${rows.data.rows.length.toLocaleString()} displayed this page · matching and total not counted · ${rows.data.durationMs} ms`
-                  : ""}
+              {rows.error
+                ? "Refresh failed"
+                : rows.loading
+                  ? "Refreshing…"
+                  : rows.data
+                    ? rowCounts
+                      ? `${rows.data.rows.length.toLocaleString()} displayed / ${rowCounts.matching.toLocaleString()} matching / ${rowCounts.total.toLocaleString()} total rows · exact · ${rows.data.durationMs} ms`
+                      : rowEstimate?.total !== undefined &&
+                          rowEstimate.total !== null
+                        ? `${rows.data.rows.length.toLocaleString()} displayed · ~${rowEstimate.total.toLocaleString()} estimated total rows · ${rows.data.durationMs} ms`
+                        : `${rows.data.rows.length.toLocaleString()} displayed this page · matching and total not counted · ${rows.data.durationMs} ms`
+                    : ""}
               {metadata.data &&
                 !identityColumns(metadata.data).length &&
                 " · no reliable unique key; paging may be unstable"}

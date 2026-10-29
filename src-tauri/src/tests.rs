@@ -1110,3 +1110,49 @@ fn connection_colors_default_validate_and_persist() {
     drop(reopened);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn incoming_relationship_cache_is_refreshed_with_metadata() {
+    let path = temp_path();
+    let mut db =
+        Database::open(&config(path.to_string_lossy().into()), &temp_path(), false).unwrap();
+    db.query(
+        "CREATE TABLE parent(id INTEGER PRIMARY KEY)",
+        &[],
+        10,
+        false,
+        30,
+    )
+    .unwrap();
+    let table = TableRef {
+        schema: String::new(),
+        name: "parent".into(),
+        kind: "table".into(),
+    };
+    let metadata = db.metadata(&table).unwrap();
+    assert!(
+        db.incoming_foreign_keys(&table, &metadata)
+            .unwrap()
+            .is_empty()
+    );
+    db.query(
+        "CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES parent(id))",
+        &[],
+        10,
+        false,
+        30,
+    )
+    .unwrap();
+    // Repeated reads use the cached catalogue until the schema refresh boundary.
+    assert!(
+        db.incoming_foreign_keys(&table, &metadata)
+            .unwrap()
+            .is_empty()
+    );
+    db.refresh_metadata();
+    let metadata = db.metadata(&table).unwrap();
+    assert_eq!(
+        db.incoming_foreign_keys(&table, &metadata).unwrap().len(),
+        1
+    );
+}

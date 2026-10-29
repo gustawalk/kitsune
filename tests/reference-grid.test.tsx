@@ -46,3 +46,21 @@ test("FK labels are display-only and original IDs remain available in the cell",
   );
   expect(result.rows[0][0]).toEqual({ kind: "text", value: "raw-id" });
 });
+
+test("wide results render only nearby columns without losing their grid positions", () => {
+  const columns = Array.from({ length: 100 }, (_, i) => `column${i}`);
+  const result: ResultSet = {
+    columns,
+    types: columns.map(() => "text"),
+    rows: [columns.map((value) => ({ kind: "text", value }))],
+    affected: 0,
+    durationMs: 0,
+    truncated: false,
+    nextCursor: null,
+    keysetSupported: false,
+  };
+  const html = renderToString(<DataGrid result={result} />);
+  expect((html.match(/role="gridcell"/g) || []).length).toBeLessThan(12);
+  expect(html).toContain("grid-column:2");
+  expect(html).not.toContain('data-grid-cell="0:99"');
+});
