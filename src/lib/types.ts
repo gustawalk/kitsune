@@ -1,6 +1,10 @@
 import type * as Contract from "./generated";
 export type DbValue = Contract.Value;
-export interface Connection extends Contract.ConnectionConfig {
+export interface Connection extends Omit<
+  Contract.ConnectionConfig,
+  "credentialStore"
+> {
+  credentialStore?: "operatingSystem" | "localVault";
   driver: "sqlite" | "postgres" | "mysql" | "mssql";
   environment: "development" | "staging" | "production" | "custom";
 }
@@ -148,6 +152,7 @@ export const emptyConnection = (): Connection => ({
   readOnly: false,
   create: false,
   rememberPassword: false,
+  credentialStore: "operatingSystem",
 });
 export function display(v: DbValue | undefined | null): string {
   if (!v) return "Not captured";

@@ -18,6 +18,7 @@ export interface ConnectionConfig {
   readOnly: boolean;
   create: boolean;
   rememberPassword: boolean;
+  credentialStore: string;
 }
 export interface TableRef {
   schema: string;

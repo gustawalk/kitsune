@@ -28,9 +28,9 @@ fn field<'a>(p: &'a Json, key: &str) -> Result<&'a str, Error> {
 fn locked() -> Error {
     Error::new("STATE", "Application state is unavailable.")
 }
-fn resolve_password(config: &mut ConnectionConfig) -> Result<(), Error> {
+fn resolve_password(state: &AppState, config: &mut ConnectionConfig) -> Result<(), Error> {
     if config.remember_password && config.password.is_empty() && !config.id.is_empty() {
-        match crate::security::credentials::load(&config.id) {
+        match crate::security::passwords::load(state, config) {
             Ok(password) => config.password = password,
             Err(error) if error.code == "CREDENTIAL_MISSING" => {}
             Err(error) => return Err(error),
@@ -56,10 +56,47 @@ pub async fn api(app: tauri::AppHandle, method: String, payload: Json) -> Result
 pub(crate) fn dispatch<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     method: &str,
-    p: Json,
+    mut p: Json,
 ) -> Result<Json, Error> {
     let state = app.state::<AppState>();
     match method {
+        "vault_connection_password" => {
+            let id = field(&p, "connectionId")?;
+            let Some(config) = state.storage.get::<ConnectionConfig>("connections", id)? else {
+                return Ok(Json::Null);
+            };
+            if !config.remember_password || config.credential_store != "localVault" {
+                return Ok(Json::Null);
+            }
+            match crate::security::passwords::load(&state, &config) {
+                Ok(password) => Ok(Json::String(password)),
+                Err(error) if error.code == "CREDENTIAL_MISSING" => Ok(Json::Null),
+                Err(error) => Err(error),
+            }
+        }
+        "vault_status" => state
+            .vault
+            .lock()
+            .map_err(|_| locked())?
+            .status(&state.storage),
+        "vault_create" | "vault_unlock" => {
+            let master = match p.get_mut("masterPassword").map(Json::take) {
+                Some(Json::String(master)) => zeroize::Zeroizing::new(master),
+                _ => return Err(Error::new("VALIDATION", "Enter a master password.")),
+            };
+            let mut vault = state.vault.lock().map_err(|_| locked())?;
+            if method == "vault_create" {
+                vault.create(&state.storage, &master)?;
+            } else {
+                vault.unlock(&state.storage, &master)?;
+            }
+            vault.status(&state.storage)
+        }
+        "vault_lock" => {
+            let mut vault = state.vault.lock().map_err(|_| locked())?;
+            vault.lock();
+            vault.status(&state.storage)
+        }
         "export_table" => crate::exports::run(&app, p),
         "diagnose_query" => crate::diagnostics::run(&app, p),
         "restore_receipt" | "restore_eligibility" | "preview_restore" | "commit_restore" => {
@@ -97,7 +134,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 (active, read_only, transactions)
             };
             Ok(
-                json!({"connections":configs,"active":active,"readOnly":read_only,"transactions":transactions,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"operatingSystem"}),
+                json!({"connections":configs,"active":active,"readOnly":read_only,"transactions":transactions,"watches":state.storage.list::<Watch>("watches")?,"investigations":state.storage.list::<Investigation>("investigations")?,"settings":state.storage.list::<ApplicationSettings>("settings")?.first(),"workspace":state.storage.list::<Json>("workspace")?.first(),"credentialStorage":"operatingSystemOrLocalVault"}),
             )
         }
         "save_connection" => {
@@ -106,14 +143,35 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             if config.id.is_empty() {
                 config.id = uuid::Uuid::new_v4().to_string();
             }
+            if let Some(previous) = state
+                .storage
+                .get::<ConnectionConfig>("connections", &config.id)?
+                && previous.remember_password
+                && config.remember_password
+                && previous.credential_store != config.credential_store
+                && config.password.is_empty()
+            {
+                return Err(Error::new(
+                    "PASSWORD_REQUIRED",
+                    "Enter the database password again when changing its storage option.",
+                ));
+            }
             let previously_remembered = state
                 .storage
                 .get::<ConnectionConfig>("connections", &config.id)?
                 .is_some_and(|saved| saved.remember_password);
-            if config.remember_password && !config.password.is_empty() {
-                crate::security::credentials::save(&config.id, &config.password)?;
-            } else if !config.remember_password && previously_remembered {
-                crate::security::credentials::remove(&config.id)?;
+            if config.remember_password
+                && (!config.password.is_empty()
+                    || (config.credential_store == "localVault" && !previously_remembered))
+            {
+                crate::security::passwords::save(&state, &config)?;
+            } else if !config.remember_password
+                && previously_remembered
+                && let Some(previous) = state
+                    .storage
+                    .get::<ConnectionConfig>("connections", &config.id)?
+            {
+                crate::security::passwords::remove(&state, &previous)?;
             }
             config.password.clear();
             config.create = false;
@@ -123,12 +181,10 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "delete_connection" => {
             let id = field(&p, "id")?;
-            if state
-                .storage
-                .get::<ConnectionConfig>("connections", id)?
-                .is_some_and(|saved| saved.remember_password)
+            if let Some(saved) = state.storage.get::<ConnectionConfig>("connections", id)?
+                && saved.remember_password
             {
-                crate::security::credentials::remove(id)?;
+                crate::security::passwords::remove(&state, &saved)?;
             }
             state.stop_connection(id);
             state.storage.delete("connections", id)?;
@@ -136,7 +192,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "test_connection" => {
             let mut config: ConnectionConfig = decode(p)?;
-            resolve_password(&mut config)?;
+            resolve_password(&state, &mut config)?;
             if config.create {
                 return Err(Error::new(
                     "VALIDATION",
@@ -148,7 +204,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
         }
         "connect" => {
             let mut config: ConnectionConfig = decode(p)?;
-            resolve_password(&mut config)?;
+            resolve_password(&state, &mut config)?;
             config.validate()?;
             let previously_remembered = !config.id.is_empty()
                 && state
@@ -160,9 +216,13 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
             }
             let db = Database::open(&config, &state.internal, false)?;
             if config.remember_password {
-                crate::security::credentials::save(&config.id, &config.password)?;
-            } else if previously_remembered {
-                crate::security::credentials::remove(&config.id)?;
+                crate::security::passwords::save(&state, &config)?;
+            } else if previously_remembered
+                && let Some(previous) = state
+                    .storage
+                    .get::<ConnectionConfig>("connections", &config.id)?
+            {
+                crate::security::passwords::remove(&state, &previous)?;
             }
             let mut monitor_config = config.clone();
             monitor_config.create = false;
@@ -1465,6 +1525,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|e| std::io::Error::other(e.message))?;
     app.manage(AppState {
+        vault: Mutex::new(crate::security::vault::Vault::default()),
         storage,
         internal,
         sessions: Mutex::new(HashMap::new()),

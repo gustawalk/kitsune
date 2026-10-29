@@ -17,6 +17,7 @@ fn app() -> (
     let path = std::env::temp_dir().join(format!("kitsune-ipc-{}.sqlite3", uuid::Uuid::new_v4()));
     let internal = path.with_extension("metadata.sqlite3");
     app.manage(AppState {
+        vault: Mutex::new(crate::security::vault::Vault::default()),
         storage: Storage::open(&internal).unwrap(),
         internal: internal.clone(),
         sessions: Mutex::new(HashMap::new()),
@@ -2402,6 +2403,220 @@ async fn bootstrap_preserves_current_session_write_mode() {
     let bootstrap = call(&app, "bootstrap", json!({})).unwrap();
     assert_eq!(bootstrap["readOnly"], json!({}));
     assert_eq!(bootstrap["active"], json!([]));
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[test]
+fn local_vault_connection_passwords_do_not_require_an_os_keyring() {
+    let (app, path, internal) = app();
+    let state = app.state::<AppState>();
+    assert_eq!(
+        call(&app, "vault_status", json!({})).unwrap()["initialized"],
+        false
+    );
+    call(
+        &app,
+        "vault_create",
+        json!({"masterPassword":"test-only-master-passphrase"}),
+    )
+    .unwrap();
+    let payload = json!({"id":"vault-connection","name":"Local vault test","driver":"sqlite","environment":"development","path":path,"password":"test-only-connection-password","rememberPassword":true,"credentialStore":"localVault"});
+    let saved = call(&app, "save_connection", payload.clone()).unwrap();
+    assert!(saved.get("password").is_none());
+    assert_eq!(saved["credentialStore"], "localVault");
+    assert_eq!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":"vault-connection"})
+        )
+        .unwrap(),
+        "test-only-connection-password"
+    );
+    assert!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":"missing-entry"})
+        )
+        .unwrap()
+        .is_null()
+    );
+    let config = state
+        .storage
+        .get::<ConnectionConfig>("connections", "vault-connection")
+        .unwrap()
+        .unwrap();
+    assert!(config.password.is_empty());
+    let mut other_provider = config.clone();
+    other_provider.credential_store = "operatingSystem".into();
+    state
+        .storage
+        .put("connections", &config.id, &other_provider)
+        .unwrap();
+    assert!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":config.id})
+        )
+        .unwrap()
+        .is_null()
+    );
+    other_provider.credential_store = "localVault".into();
+    other_provider.remember_password = false;
+    state
+        .storage
+        .put("connections", &config.id, &other_provider)
+        .unwrap();
+    assert!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":config.id})
+        )
+        .unwrap()
+        .is_null()
+    );
+    state
+        .storage
+        .put("connections", &config.id, &config)
+        .unwrap();
+    assert_eq!(
+        crate::security::passwords::load(&state, &config).unwrap(),
+        "test-only-connection-password"
+    );
+    call(&app, "vault_lock", json!({})).unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":"vault-connection"})
+        )
+        .unwrap_err()
+        .code,
+        "VAULT_LOCKED"
+    );
+    assert_eq!(
+        crate::security::passwords::load(&state, &config)
+            .unwrap_err()
+            .code,
+        "VAULT_LOCKED"
+    );
+    assert_eq!(
+        call(&app, "delete_connection", json!({"id":"vault-connection"}))
+            .unwrap_err()
+            .code,
+        "VAULT_LOCKED"
+    );
+    assert!(
+        state
+            .storage
+            .get::<ConnectionConfig>("connections", "vault-connection")
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(
+        call(
+            &app,
+            "vault_unlock",
+            json!({"masterPassword":"wrong-test-master-password"})
+        )
+        .unwrap_err()
+        .code,
+        "VAULT_AUTH"
+    );
+    call(
+        &app,
+        "vault_unlock",
+        json!({"masterPassword":"test-only-master-passphrase"}),
+    )
+    .unwrap();
+    // Blank edits preserve the saved password in its original provider.
+    let mut blank = payload;
+    blank["password"] = json!("");
+    call(&app, "save_connection", blank.clone()).unwrap();
+    assert_eq!(
+        crate::security::passwords::load(&state, &config).unwrap(),
+        "test-only-connection-password"
+    );
+    blank["credentialStore"] = json!("operatingSystem");
+    assert_eq!(
+        call(&app, "save_connection", blank).unwrap_err().code,
+        "PASSWORD_REQUIRED"
+    );
+    call(&app, "delete_connection", json!({"id":"vault-connection"})).unwrap();
+    assert!(
+        call(
+            &app,
+            "vault_connection_password",
+            json!({"connectionId":"vault-connection"})
+        )
+        .unwrap()
+        .is_null()
+    );
+    assert_eq!(
+        crate::security::passwords::load(&state, &config)
+            .unwrap_err()
+            .code,
+        "CREDENTIAL_MISSING"
+    );
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[test]
+#[ignore = "Requires disposable PostgreSQL credentials in KITSUNE_VAULT_TEST_* and bundled libpq on LD_LIBRARY_PATH"]
+fn postgres_vault_password_survives_session_restart() {
+    let (app, path, internal) = app();
+    let password =
+        std::env::var("KITSUNE_VAULT_TEST_PASSWORD").expect("Set disposable test credentials");
+    let payload = json!({
+        "id":"vault-postgres-test", "name":"Disposable vault PostgreSQL", "driver":"postgres",
+        "environment":"development", "host":"127.0.0.1",
+        "port":std::env::var("KITSUNE_VAULT_TEST_PORT").unwrap().parse::<u16>().unwrap(),
+        "database":std::env::var("KITSUNE_VAULT_TEST_DATABASE").unwrap(),
+        "username":std::env::var("KITSUNE_VAULT_TEST_USERNAME").unwrap(),
+        "password":password, "sslMode":"disable", "rememberPassword":true, "credentialStore":"localVault"
+    });
+    call(
+        &app,
+        "vault_create",
+        json!({"masterPassword":"test-only-restart-master-passphrase"}),
+    )
+    .unwrap();
+    call(&app, "connect", payload).unwrap();
+    call(&app, "disconnect", json!({"id":"vault-postgres-test"})).unwrap();
+    let config = app
+        .state::<AppState>()
+        .storage
+        .get::<ConnectionConfig>("connections", "vault-postgres-test")
+        .unwrap()
+        .unwrap();
+    let saved = serde_json::to_value(config).unwrap();
+    assert!(saved.get("password").is_none());
+    // Recreate in-memory vault state, retaining only its encrypted disk document.
+    *app.state::<AppState>().vault.lock().unwrap() = crate::security::vault::Vault::default();
+    assert_eq!(
+        call(&app, "connect", saved.clone()).unwrap_err().code,
+        "VAULT_LOCKED"
+    );
+    call(
+        &app,
+        "vault_unlock",
+        json!({"masterPassword":"test-only-restart-master-passphrase"}),
+    )
+    .unwrap();
+    call(&app, "test_connection", saved.clone()).unwrap();
+    call(&app, "connect", saved.clone()).unwrap();
+    call(&app, "disconnect", json!({"id":"vault-postgres-test"})).unwrap();
+    // An ordinary blank edit must not replace the stored database password.
+    call(&app, "save_connection", saved.clone()).unwrap();
+    call(&app, "connect", saved).unwrap();
+    call(&app, "disconnect", json!({"id":"vault-postgres-test"})).unwrap();
     drop(app);
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(internal);

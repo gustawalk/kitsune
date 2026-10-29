@@ -1,8 +1,9 @@
+import { PasswordVault } from "../components/PasswordVault";
 import { ConnectionColorPicker } from "../components/ConnectionColorPicker";
 import { Tooltip } from "../components/ui/tooltip";
 import { Checkbox } from "../components/ui/checkbox";
 import { Select, SelectItem } from "../components/ui/select";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -39,9 +40,53 @@ export function ConnectionDialog({
   );
   const [config, setConfig] = useState(initial || emptyConnection());
   const [password, setPassword] = useState("");
+  const passwordEdited = useRef(false);
+  const passwordAutofilled = useRef(false);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [tested, setTested] = useState(false);
+  const [vaultUnlocked, setVaultUnlocked] = useState(false);
+  const needsVaultUnlock =
+    config.rememberPassword &&
+    config.credentialStore === "localVault" &&
+    !vaultUnlocked;
+  const hasSavedPassword =
+    !!initial?.rememberPassword &&
+    config.rememberPassword &&
+    (initial.credentialStore || "operatingSystem") ===
+      (config.credentialStore || "operatingSystem");
+  useEffect(() => {
+    let current = true;
+    if (
+      !vaultUnlocked ||
+      !hasSavedPassword ||
+      config.credentialStore !== "localVault"
+    ) {
+      if (passwordAutofilled.current) {
+        setPassword("");
+        passwordAutofilled.current = false;
+      }
+      return;
+    }
+    if (passwordEdited.current || !config.id) return;
+    // Fetch only the current entry after unlock. This response must never use
+    // the shared request cache or be published as a vault-status event.
+    void api<string | null>("vault_connection_password", {
+      connectionId: config.id,
+    })
+      .then((saved) => {
+        if (current && !passwordEdited.current && saved !== null) {
+          setPassword(saved);
+          passwordAutofilled.current = true;
+        }
+      })
+      .catch((failure) => {
+        if (current) setError(errorMessage(failure));
+      });
+    return () => {
+      current = false;
+    };
+  }, [vaultUnlocked, hasSavedPassword, config.id, config.credentialStore]);
   const patch = (v: Partial<Connection>) => {
     setConfig((c) => {
       const next = { ...c, ...v };
@@ -71,6 +116,12 @@ export function ConnectionDialog({
   const missingFile = config.driver === "sqlite" && !config.path;
   async function action(kind: string) {
     if (busy) return;
+    if (needsVaultUnlock) {
+      setError(
+        "Unlock your Kitsune vault below before using its saved database passwords.",
+      );
+      return;
+    }
     if (missingFile) {
       setError("Choose a database file first.");
       return;
@@ -311,15 +362,29 @@ export function ConnectionDialog({
                     label="Password"
                     hint={
                       config.rememberPassword
-                        ? "Stored in your operating-system credential manager"
+                        ? hasSavedPassword
+                          ? config.credentialStore === "localVault"
+                            ? "Fills automatically when the vault is unlocked. You can edit it to replace it."
+                            : "A password is saved. Leave blank to use it, or enter a replacement."
+                          : "Enter the database password to save with this connection."
                         : "Session only · never persisted"
                     }
                   >
                     <input
                       type="password"
                       value={password}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => {
+                        passwordEdited.current = true;
+                        passwordAutofilled.current = false;
+                        setPassword(e.target.value);
+                      }}
                       autoComplete="current-password"
+                      aria-label="Database password"
+                      placeholder={
+                        hasSavedPassword
+                          ? "Saved password · leave blank to reuse"
+                          : "Database password"
+                      }
                     />
                   </Field>
                   <label className="check-row full">
@@ -331,6 +396,40 @@ export function ConnectionDialog({
                     />
                     Remember password securely
                   </label>
+                  {config.rememberPassword && (
+                    <div className="full connection-password-storage">
+                      <Field label="Password storage">
+                        <Select
+                          value={config.credentialStore || "operatingSystem"}
+                          onValueChange={(value) => {
+                            patch({
+                              credentialStore: value as
+                                "operatingSystem" | "localVault",
+                            });
+                          }}
+                        >
+                          <SelectItem value="operatingSystem">
+                            Operating-system keyring
+                          </SelectItem>
+                          <SelectItem value="localVault">
+                            Encrypted local vault
+                          </SelectItem>
+                        </Select>
+                      </Field>
+                      {initial?.rememberPassword &&
+                        (initial.credentialStore || "operatingSystem") !==
+                          (config.credentialStore || "operatingSystem") && (
+                          <p className="muted">
+                            Enter the database password again when changing
+                            storage. Existing passwords in the previous store
+                            are kept.
+                          </p>
+                        )}
+                      {config.credentialStore === "localVault" && (
+                        <PasswordVault onUnlockedChange={setVaultUnlocked} />
+                      )}
+                    </div>
+                  )}
                   <Field
                     label="TLS mode"
                     hint="require encrypts traffic; verify-full also validates server identity. Use require only for trusted endpoints."
@@ -481,6 +580,7 @@ export function ConnectionDialog({
               variant="secondary"
               disabled={
                 !!busy ||
+                needsVaultUnlock ||
                 missingFile ||
                 (config.driver === "sqlite" && config.create)
               }
@@ -499,12 +599,12 @@ export function ConnectionDialog({
             <Button
               type="button"
               variant="ghost"
-              disabled={!!busy || missingFile}
+              disabled={!!busy || missingFile || needsVaultUnlock}
               onClick={() => void action("save")}
             >
               Save
             </Button>
-            <Button disabled={!!busy || missingFile}>
+            <Button disabled={!!busy || missingFile || needsVaultUnlock}>
               {busy === "connect" ? (
                 <LoaderCircle size={14} className="spin" />
               ) : (

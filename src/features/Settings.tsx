@@ -1,3 +1,4 @@
+import { PasswordVault } from "../components/PasswordVault";
 import { Checkbox } from "../components/ui/checkbox";
 import { themes } from "../lib/themes";
 import { Select, SelectItem } from "../components/ui/select";
@@ -176,6 +177,10 @@ export function SettingsWorkspace() {
             />
             Restore previous tabs on launch (SQL text is stored locally)
           </label>
+        </section>
+        <section>
+          <h2>Local password vault</h2>
+          <PasswordVault />
         </section>
         <section>
           <h2>Database execution</h2>

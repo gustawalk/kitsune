@@ -114,6 +114,7 @@ impl Drop for OperationGuard<'_> {
     }
 }
 pub struct AppState {
+    pub vault: Mutex<crate::security::vault::Vault>,
     pub approvals: Mutex<HashMap<String, Approval>>,
     pub watch_gate: Mutex<()>,
     pub watch_errors: Mutex<HashMap<String, String>>,

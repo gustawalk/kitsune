@@ -4751,3 +4751,96 @@ html.is-resizing * {
   -webkit-user-select: none;
   touch-action: none;
 }
+
+.connection-password-storage {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.connection-password-storage > .field {
+  max-width: 360px;
+  margin-bottom: 0;
+}
+.password-vault {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+}
+.vault-heading,
+.vault-heading > span:first-child,
+.vault-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.vault-heading,
+.vault-footer {
+  justify-content: space-between;
+}
+.vault-heading strong {
+  font-size: 12px;
+  font-weight: 500;
+}
+.vault-heading svg {
+  color: var(--muted);
+}
+.vault-status {
+  font-size: 10px;
+  color: var(--muted);
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.is-unlocked .vault-status,
+.is-unlocked .vault-heading svg {
+  color: var(--green);
+}
+.password-vault .vault-description {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.vault-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.password-vault .field {
+  margin-bottom: 0;
+}
+.vault-password-input {
+  position: relative;
+}
+.vault-password-input input {
+  width: 100%;
+  padding-right: 38px;
+}
+.vault-password-input .button {
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  bottom: 3px;
+  width: 28px;
+  height: auto;
+}
+.vault-footer small {
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.vault-footer .button {
+  flex-shrink: 0;
+}
+@media (max-width: 600px) {
+  .vault-fields {
+    grid-template-columns: 1fr;
+  }
+  .vault-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

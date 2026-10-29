@@ -72,6 +72,11 @@ pub struct ConnectionConfig {
     pub create: bool,
     #[serde(default)]
     pub remember_password: bool,
+    #[serde(default = "credential_store")]
+    pub credential_store: String,
+}
+fn credential_store() -> String {
+    "operatingSystem".into()
 }
 fn port() -> u16 {
     5432
@@ -81,6 +86,9 @@ fn tls() -> String {
 }
 impl ConnectionConfig {
     pub fn validate(&self) -> Result<(), Error> {
+        if !["operatingSystem", "localVault"].contains(&self.credential_store.as_str()) {
+            return Err(Error::new("VALIDATION", "Invalid password storage option."));
+        }
         if self.name.trim().is_empty() {
             return Err(Error::new("VALIDATION", "A connection name is required."));
         }

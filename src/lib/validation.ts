@@ -32,6 +32,9 @@ const record = z.object({
 });
 const filter = z.object({ column: z.string(), operator: z.string(), value });
 const connection = z.object({
+  credentialStore: z
+    .enum(["operatingSystem", "localVault"])
+    .default("operatingSystem"),
   id: z.string(),
   name: z.string(),
   color: z
@@ -238,7 +241,16 @@ const event = z.object({
   afterState: z.array(z.object({ column: z.string(), value })).nullable(),
   capture: z.string(),
 });
+const vaultStatus = z.object({
+  initialized: z.boolean(),
+  unlocked: z.boolean(),
+});
 const schemas: Record<string, z.ZodType> = {
+  vault_connection_password: z.string().nullable(),
+  vault_status: vaultStatus,
+  vault_create: vaultStatus,
+  vault_unlock: vaultStatus,
+  vault_lock: vaultStatus,
   sql_completion: z.array(
     z.object({
       label: z.string(),

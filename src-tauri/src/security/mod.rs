@@ -63,3 +63,6 @@ impl Subscriber for SafeLog {
     }
 }
 pub mod credentials;
+
+pub mod passwords;
+pub mod vault;

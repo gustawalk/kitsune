@@ -20,6 +20,7 @@ fn config(path: String) -> ConnectionConfig {
         read_only: false,
         create: true,
         remember_password: false,
+        credential_store: "operatingSystem".into(),
     }
 }
 fn temp_path() -> std::path::PathBuf {
