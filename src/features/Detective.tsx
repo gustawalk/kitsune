@@ -1,3 +1,4 @@
+import { copyFieldText, copyRecordJson } from "../lib/record-copy";
 import { Tooltip } from "../components/ui/tooltip";
 import { arrangeCards } from "../lib/schema";
 import { useEffect, useRef, useState } from "react";
@@ -94,6 +95,7 @@ export function Inspector({
     workspace.activeConnections.includes(record.connectionId),
   );
   const [expanded, setExpanded] = useState<string[]>([]);
+  useEffect(() => setExpanded([]), [record]);
   const watching = workspace.watches.filter((w) =>
     watchMatchesRecord(w, record),
   );
@@ -133,6 +135,16 @@ export function Inspector({
           </button>
         </Tooltip>
         <div className="inspector-actions">
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={data.loading || !data.data?.result.rows.length}
+            onClick={() =>
+              data.data && void copyFeedback(copyRecordJson(data.data.result))
+            }
+          >
+            <Copy size={14} /> Copy record JSON
+          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -210,6 +222,18 @@ export function Inspector({
                       {c.pk > 0 && <KeyRound size={10} />} {c.name}
                     </span>
                     <span className="type-label">{c.dataType}</span>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Copy ${c.name}`}
+                      title="Copy full value"
+                      disabled={data.loading || !value}
+                      onClick={() =>
+                        value && void copyFeedback(copyFieldText(value))
+                      }
+                    >
+                      <Copy size={12} />
+                    </Button>
                   </div>
                   <Tooltip content={"Expand/collapse value"}>
                     <button
