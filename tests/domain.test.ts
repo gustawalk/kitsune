@@ -154,6 +154,13 @@ describe("external data validation", () => {
   });
   test("validates settings bounds", () => {
     expect(settingsSchema.safeParse(defaults).success).toBe(true);
+    expect(defaults.rowLimit).toBe(50000);
+    expect(
+      settingsSchema.safeParse({ ...defaults, rowLimit: 100000 }).success,
+    ).toBe(true);
+    expect(
+      settingsSchema.safeParse({ ...defaults, rowLimit: 100001 }).success,
+    ).toBe(false);
     expect(
       settingsSchema.safeParse({ ...defaults, pollInterval: 0 }).success,
     ).toBe(false);

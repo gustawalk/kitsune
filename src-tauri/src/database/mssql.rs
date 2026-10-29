@@ -512,10 +512,10 @@ async fn collect(
                     .map(|(i, (_, v))| decode(&row, i, v))
                     .collect::<Result<Vec<_>, _>>()?;
                 bytes += serde_json::to_vec(&values).map_err(driver_error)?.len();
-                if bytes > 10 * 1024 * 1024 {
+                if bytes > crate::database::MAX_RESULT_BYTES {
                     return Err(Error::new(
                         "RESULT_LIMIT",
-                        "SQL Server result exceeds 10 MiB.",
+                        "SQL Server result exceeds 64 MiB.",
                     ));
                 }
                 result.rows.push(values);

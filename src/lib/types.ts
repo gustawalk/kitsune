@@ -117,7 +117,7 @@ export const defaults: Settings = {
   theme: "dark",
   density: "compact",
   pageSize: 100,
-  rowLimit: 1000,
+  rowLimit: 50000,
   queryTimeout: 30,
   pollInterval: 5,
   retentionDays: 30,

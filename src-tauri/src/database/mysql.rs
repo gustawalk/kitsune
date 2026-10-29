@@ -716,10 +716,10 @@ async fn collect<P: mysql_async::prelude::Protocol>(
                 .map(|(v, c)| value(v, c))
                 .collect();
             bytes += serde_json::to_vec(&values).map_err(failure)?.len();
-            if bytes > 10 * 1024 * 1024 {
+            if bytes > crate::database::MAX_RESULT_BYTES {
                 return Err(Error::new(
                     "RESULT_LIMIT",
-                    "Results exceed 10 MiB; the connection was discarded. Writes may already have completed.",
+                    "Results exceed 64 MiB; the connection was discarded. Writes may already have completed.",
                 ));
             }
             set.rows.push(values);

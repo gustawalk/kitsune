@@ -197,7 +197,7 @@ export function SettingsWorkspace() {
                 required
                 type="number"
                 min={1}
-                max={10000}
+                max={100000}
                 value={settings.rowLimit}
                 onChange={(e) => patch({ rowLimit: Number(e.target.value) })}
               />

@@ -94,7 +94,7 @@ pub fn run<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Json) -> Resul
             Some(db.query(
                 &sql,
                 &request.params,
-                settings.row_limit.clamp(1, 10000) as usize,
+                settings.row_limit.clamp(1, 100000) as usize,
                 true,
                 settings.query_timeout,
             )?)
@@ -187,7 +187,7 @@ pub fn run<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Json) -> Resul
                 sql.clone()
             },
             &request.params,
-            settings.row_limit.clamp(1, 10000) as usize,
+            settings.row_limit.clamp(1, 100000) as usize,
             true,
             settings.query_timeout,
         )?)

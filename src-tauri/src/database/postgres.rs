@@ -357,7 +357,7 @@ impl Pg {
                     for col in 0..ncols {
                         let len = unsafe { (self.api.length)(r, row, col) } as usize;
                         bytes = bytes.saturating_add(len);
-                        if bytes > 10 * 1024 * 1024 {
+                        if bytes > crate::database::MAX_RESULT_BYTES {
                             break;
                         }
                         let value = if unsafe { (self.api.null)(r, row, col) } != 0 {
@@ -369,7 +369,7 @@ impl Pg {
                         };
                         record.push(value);
                     }
-                    if bytes > 10 * 1024 * 1024 || output.rows.len() >= limit {
+                    if bytes > crate::database::MAX_RESULT_BYTES || output.rows.len() >= limit {
                         output.truncated = true;
                         if !cancelled {
                             if let Some(c) = self.cancel_handle() {

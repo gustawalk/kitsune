@@ -1299,6 +1299,16 @@ async fn record_existence_restore_handles_generated_values_and_schema_guards() {
 #[tokio::test]
 async fn diagnostics_preserve_parameters_reject_writes_and_report_partial_measurements() {
     let (app, path, internal) = app();
+    call(
+        &app,
+        "save_settings",
+        serde_json::to_value(ApplicationSettings {
+            row_limit: 1000,
+            ..ApplicationSettings::default()
+        })
+        .unwrap(),
+    )
+    .unwrap();
     let external = rusqlite::Connection::open(&path).unwrap();
     external.execute_batch("CREATE TABLE data(id INTEGER PRIMARY KEY,name TEXT); CREATE INDEX data_name ON data(name); INSERT INTO data VALUES(1,'one'),(2,'two'),(3,'three');").unwrap();
     connect(&app, &path, false);

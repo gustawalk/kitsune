@@ -19,6 +19,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Upper bound for collected results; row and timeout limits still apply.
+pub const MAX_RESULT_BYTES: usize = 64 * 1024 * 1024;
+
 enum Driver {
     Sqlite(Connection),
     Postgres(postgres::Pg),
@@ -285,7 +288,8 @@ impl Database {
                                 ValueRef::Blob(v) | ValueRef::Text(v) => v.len(),
                                 _ => 8,
                             };
-                            if bytes.saturating_add(value_bytes) > 10 * 1024 * 1024 {
+                            if bytes.saturating_add(value_bytes) > crate::database::MAX_RESULT_BYTES
+                            {
                                 if read_only {
                                     result.truncated = true;
                                     too_large = true;

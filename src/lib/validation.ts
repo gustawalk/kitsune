@@ -198,7 +198,7 @@ const settings = z.object({
   theme: z.enum(THEME_IDS),
   density: z.enum(["compact", "comfortable"]),
   pageSize: z.number().int().min(10).max(1000),
-  rowLimit: z.number().int().min(1).max(10000),
+  rowLimit: z.number().int().min(1).max(100000),
   queryTimeout: z.number().int().min(1).max(300),
   pollInterval: z.number().int().min(2).max(3600),
   retentionDays: z.number().int().min(1).max(3650),

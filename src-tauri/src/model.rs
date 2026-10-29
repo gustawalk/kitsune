@@ -545,7 +545,7 @@ impl Default for ApplicationSettings {
             theme: "dark".into(),
             density: "compact".into(),
             page_size: 100,
-            row_limit: 1000,
+            row_limit: 50000,
             query_timeout: 30,
             poll_interval: 5,
             retention_days: 30,
@@ -572,7 +572,7 @@ impl ApplicationSettings {
         }
         for (name, value, min, max) in [
             ("Page size", self.page_size as u64, 10, 1000),
-            ("Result rows", self.row_limit as u64, 1, 10000),
+            ("Result rows", self.row_limit as u64, 1, 100000),
             ("Query timeout", self.query_timeout, 1, 300),
             ("Polling interval", self.poll_interval, 2, 3600),
             ("Retention days", self.retention_days, 1, 3650),

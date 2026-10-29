@@ -664,8 +664,9 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
             {execution.results[resultIndex].truncated && (
               <div className="result-limit-note" role="status">
                 Partial read-only result: Kitsune stopped fetching at its safety
-                limit and rolled back its read transaction. Narrow the query or
-                add an explicit filter before running it again.
+                limit and rolled back its read transaction. Increase Maximum
+                result rows in Settings → Database execution, or select fewer
+                columns if the result reaches the 64 MiB size limit.
               </div>
             )}
             <DataGrid

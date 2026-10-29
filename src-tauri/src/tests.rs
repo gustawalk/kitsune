@@ -707,6 +707,12 @@ fn corrupted_metadata_is_preserved() {
 #[test]
 fn settings_are_typed_and_bounded() {
     let mut settings = ApplicationSettings::default();
+    assert_eq!(settings.row_limit, 50000);
+    settings.row_limit = 100000;
+    assert!(settings.validate().is_ok());
+    settings.row_limit = 100001;
+    assert!(settings.validate().is_err());
+    settings.row_limit = 50000;
     assert!(settings.validate().is_ok());
     settings.poll_interval = 0;
     assert!(settings.validate().is_err());
@@ -1155,4 +1161,23 @@ fn incoming_relationship_cache_is_refreshed_with_metadata() {
         db.incoming_foreign_keys(&table, &metadata).unwrap().len(),
         1
     );
+}
+
+#[test]
+fn large_query_results_exceed_old_row_and_payload_limits() {
+    let path = temp_path();
+    let mut db =
+        Database::open(&config(path.to_string_lossy().into()), &temp_path(), false).unwrap();
+    let result = db.query(
+        "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<13059) SELECT x, printf('%01024d', x) FROM n",
+        &[],
+        50000,
+        true,
+        30,
+    ).unwrap();
+    assert_eq!(result.rows.len(), 13059);
+    assert!(!result.truncated);
+    let encoded_size = serde_json::to_vec(&result).unwrap().len();
+    assert!(encoded_size > 10 * 1024 * 1024);
+    assert!(encoded_size < crate::database::MAX_RESULT_BYTES);
 }

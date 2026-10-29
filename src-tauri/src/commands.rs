@@ -682,7 +682,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 .into_iter()
                 .next()
                 .unwrap_or_default();
-            let limit = settings.row_limit.clamp(1, 10000) as usize;
+            let limit = settings.row_limit.clamp(1, 100000) as usize;
             let timeout = settings.query_timeout.clamp(1, 300);
             if let Some(handle) = db.interrupt() {
                 *operation.interrupt.lock().map_err(|_| locked())? = Some(handle);
@@ -752,10 +752,10 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 match outcome {
                     Ok(mut sets) if sets.len() > 1 => {
                         let size = serde_json::to_vec(&sets).map_err(|_| locked())?.len();
-                        if result_bytes.saturating_add(size) > 10 * 1024 * 1024 {
+                        if result_bytes.saturating_add(size) > crate::database::MAX_RESULT_BYTES {
                             error = Some(Error::new(
                                 "SCRIPT_RESULT_LIMIT",
-                                "Results exceed 10 MiB. Earlier statements may have committed.",
+                                "Results exceed 64 MiB. Earlier statements may have committed.",
                             ));
                             break;
                         }
@@ -769,7 +769,7 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                                 Error::new("SERIALIZATION", "Cannot encode query results.")
                             })?
                             .len();
-                        if result_bytes.saturating_add(size) > 10 * 1024 * 1024 {
+                        if result_bytes.saturating_add(size) > crate::database::MAX_RESULT_BYTES {
                             result.rows.clear();
                             result.columns.clear();
                             result.types.clear();
