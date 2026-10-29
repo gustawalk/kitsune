@@ -3,7 +3,6 @@
 </p>
 
 <h1 align="center">Kitsune</h1>
-<p align="center"><strong>Understand your data.</strong></p>
 
 Kitsune is a local-first desktop database client for developers. Browse tables, write SQL, follow a record’s relationships, watch it change, and inspect the observations in one workspace.
 
