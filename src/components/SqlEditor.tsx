@@ -6,7 +6,7 @@ import { editorDialect } from "../lib/sql-language";
 import { quoteSqlName, type SqlDialect } from "../lib/sql-portable";
 import { useEffect, useRef } from "react";
 import { EditorView, keymap } from "@codemirror/view";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState, Compartment, Prec } from "@codemirror/state";
 import {
   syntaxHighlighting,
   HighlightStyle,
@@ -105,23 +105,27 @@ export function SqlEditor({
             }),
           ),
           syntaxHighlighting(sqlHighlight),
-          keymap.of([
-            indentWithTab,
-            {
-              key: "Mod-Enter",
-              run: () => {
-                window.dispatchEvent(new Event("kitsune:execute"));
-                return true;
+          keymap.of([indentWithTab]),
+          Prec.highest(
+            keymap.of([
+              {
+                key: "Mod-Enter",
+                preventDefault: true,
+                run: () => {
+                  window.dispatchEvent(new Event("kitsune:execute"));
+                  return true;
+                },
               },
-            },
-            {
-              key: "Mod-s",
-              run: () => {
-                window.dispatchEvent(new Event("kitsune:save"));
-                return true;
+              {
+                key: "Mod-s",
+                preventDefault: true,
+                run: () => {
+                  window.dispatchEvent(new Event("kitsune:save"));
+                  return true;
+                },
               },
-            },
-          ]),
+            ]),
+          ),
           autocompletion({
             override: [
               completion,
