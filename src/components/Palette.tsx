@@ -1,3 +1,4 @@
+import { rankSearch } from "../lib/search";
 import { useState } from "react";
 import {
   Command,
@@ -11,6 +12,7 @@ import {
   Search,
   Settings2,
   Table2,
+  type LucideIcon,
 } from "lucide-react";
 import { Dialog } from "./ui/dialog";
 import { invalidate, useRemote } from "../lib/api";
@@ -30,7 +32,13 @@ export function Palette({ onConnection }: { onConnection: () => void }) {
     {},
   );
   const bootstrap = useRemote<Bootstrap>("bootstrap", {});
-  const commands = [
+  const commands: Array<{
+    name: string;
+    detail: string;
+    icon: LucideIcon;
+    action: () => void;
+    searchNames?: string[];
+  }> = [
     {
       name: "New SQL query",
       detail: "Command",
@@ -108,6 +116,7 @@ export function Palette({ onConnection }: { onConnection: () => void }) {
     ...(tables.data || []).map((t) => ({
       name: [t.schema, t.name].filter(Boolean).join("."),
       detail: "Table",
+      searchNames: [t.name, [t.schema, t.name].filter(Boolean).join(".")],
       icon: Table2,
       action: () =>
         openTab({
@@ -173,11 +182,12 @@ export function Palette({ onConnection }: { onConnection: () => void }) {
         ),
     });
   }
-  const filtered = commands
-    .filter((c) =>
-      `${c.name} ${c.detail}`.toLowerCase().includes(search.toLowerCase()),
-    )
-    .slice(0, 100);
+  const filtered = rankSearch(
+    commands,
+    search,
+    (c) => c.searchNames || [c.name],
+    (c) => [`${c.name} ${c.detail}`],
+  ).slice(0, 100);
   function run(index: number) {
     const c = filtered[index];
     if (c) {

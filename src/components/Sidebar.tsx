@@ -1,6 +1,7 @@
+import { rankSearch } from "../lib/search";
 import { Tooltip } from "./ui/tooltip";
 import { modKey } from "../lib/utils";
-import { useState, useDeferredValue } from "react";
+import { useState, useDeferredValue, useMemo } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -74,7 +75,30 @@ export function Sidebar({
     { connectionId: workspace.activeConnection },
     !!active && connected,
   );
-  const schemas = [...new Set(tables.data?.map((t) => t.schema) || [])];
+  const rankedTables = useMemo(
+    () =>
+      rankSearch(
+        (tables.data || []).filter((t) => {
+          const key = `${workspace.activeConnection}:${t.schema}:${t.name}`;
+          return (
+            mode === "all" ||
+            (mode === "favorites" && favorite.includes(key)) ||
+            (mode === "recent" && recent.includes(key))
+          );
+        }),
+        deferredSearch,
+        (t) => [t.name, [t.schema, t.name].filter(Boolean).join(".")],
+      ),
+    [
+      tables.data,
+      deferredSearch,
+      mode,
+      favorite,
+      recent,
+      workspace.activeConnection,
+    ],
+  );
+  const schemas = [...new Set(rankedTables.map((t) => t.schema))];
   const [collapsedSchemas, setCollapsedSchemas] = useState<string[]>([]);
   function toggleFavorite(key: string) {
     const next = favorite.includes(key)
@@ -373,19 +397,8 @@ export function Sidebar({
                   </button>
                 )}
                 {!collapsedSchemas.includes(schema) &&
-                  tables.data
-                    ?.filter((t) => {
-                      const key = `${workspace.activeConnection}:${t.schema}:${t.name}`;
-                      return (
-                        t.schema === schema &&
-                        t.name
-                          .toLowerCase()
-                          .includes(deferredSearch.toLowerCase()) &&
-                        (mode === "all" ||
-                          (mode === "favorites" && favorite.includes(key)) ||
-                          (mode === "recent" && recent.includes(key)))
-                      );
-                    })
+                  rankedTables
+                    .filter((t) => t.schema === schema)
                     .slice(0, 200)
                     .map((t) => {
                       const key = `${workspace.activeConnection}:${t.schema}:${t.name}`;

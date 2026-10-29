@@ -1,3 +1,4 @@
+import { rankSearch } from "./search";
 import type { ForeignKey, Metadata, TableRef } from "./types";
 export const SCHEMA_DIAGRAM_LIMIT = 200;
 export function tableKey(table: TableRef): string {
@@ -27,12 +28,14 @@ export function filterSchemaTables(
   namespace: string | null,
   kind: string,
 ): TableRef[] {
-  const term = search.trim().toLowerCase();
-  return tables.filter(
-    (t) =>
-      (namespace === null || t.schema === namespace) &&
-      (kind === "all" || t.kind === kind) &&
-      `${t.schema}.${t.name}`.toLowerCase().includes(term),
+  return rankSearch(
+    tables.filter(
+      (t) =>
+        (namespace === null || t.schema === namespace) &&
+        (kind === "all" || t.kind === kind),
+    ),
+    search,
+    (t) => [t.name, [t.schema, t.name].filter(Boolean).join(".")],
   );
 }
 export interface SchemaNode {
