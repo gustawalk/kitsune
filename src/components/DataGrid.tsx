@@ -171,6 +171,13 @@ export function DataGrid({
   useEffect(() => {
     onVisibleColumns?.(cols.map((i) => result.columns[i]));
   }, [visibleSignature, onVisibleColumns]);
+  useEffect(() => {
+    setCell(([row, col]) => [row, Math.max(0, Math.min(col, cols.length - 1))]);
+    setAnchor(([row, col]) => [
+      row,
+      Math.max(0, Math.min(col, cols.length - 1)),
+    ]);
+  }, [visibleSignature]);
   const rowHeight = density === "comfortable" ? 40 : 32;
   const start = Math.max(0, Math.floor(scroll / rowHeight) - 8);
   const end = Math.min(
@@ -225,7 +232,7 @@ export function DataGrid({
     );
   }
   function navigate(e: React.KeyboardEvent) {
-    if (busy) return;
+    if (busy || !cols.length) return;
     if (
       (e.target as HTMLElement).closest(
         'input,textarea,[role="checkbox"],[role="menu"]',
@@ -449,7 +456,7 @@ export function DataGrid({
               variant="secondary"
               size="sm"
               title="Edit selected cell (F2)"
-              disabled={!result.rows[cell[0]]}
+              disabled={!cols.length || !result.rows[cell[0]]}
               onClick={() =>
                 onEdit(
                   result.rows[cell[0]],
@@ -465,7 +472,7 @@ export function DataGrid({
           <Button
             variant="ghost"
             size="sm"
-            disabled={!result.rows.length}
+            disabled={!cols.length || !result.rows.length}
             title="Copy selected cells (Ctrl/Cmd+C)"
             onClick={copySelection}
           >
@@ -501,6 +508,28 @@ export function DataGrid({
               Columns
             </summary>
             <div>
+              <div className="column-menu-actions">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={!hidden.length}
+                  onClick={() => setHidden(() => [])}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={hidden.length === result.columns.length}
+                  onClick={() =>
+                    setHidden(() => result.columns.map((_, i) => i))
+                  }
+                >
+                  Unselect all
+                </Button>
+              </div>
               {result.columns.map((name, i) => (
                 <label key={`${name}-${i}`}>
                   <Checkbox
@@ -637,160 +666,170 @@ export function DataGrid({
             </div>
             <div
               style={{
-                height: result.rows.length * rowHeight,
+                height: cols.length ? result.rows.length * rowHeight : 0,
                 width: totalWidth,
                 position: "relative",
               }}
             >
-              {result.rows.slice(start, end).map((row, n) => {
-                const r = start + n;
-                return (
-                  <div
-                    role="row"
-                    aria-rowindex={r + 2}
-                    key={r}
-                    className={`grid-row ${selected === r || selectedRows.includes(r) ? "selected-row" : ""}`}
-                    style={{
-                      gridTemplateColumns: template,
-                      height: rowHeight,
-                      position: "absolute",
-                      top: r * rowHeight,
-                      width: totalWidth,
-                    }}
-                  >
-                    <div className="row-number">
-                      {onSelectionChange && (
-                        <Checkbox
-                          aria-label={`Select row ${r + 1}`}
-                          onClickCapture={(e) => {
-                            if (e.shiftKey) {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              const from = Math.min(lastSelected.current, r),
-                                to = Math.max(lastSelected.current, r);
-                              const next = Array.from(
-                                { length: to - from + 1 },
-                                (_, i) => from + i,
-                              );
-                              if (next.length <= 500) onSelectionChange?.(next);
-                            } else lastSelected.current = r;
-                          }}
-                          checked={selectedRows.includes(r)}
-                          disabled={
-                            selectedRows.length >= 500 &&
-                            !selectedRows.includes(r)
-                          }
-                          onCheckedChange={(checked) =>
-                            onSelectionChange(
-                              toggleRowSelection(selectedRows, r, checked),
-                            )
-                          }
-                        />
-                      )}
-                      <span>{r + 1}</span>
-                    </div>
-                    {renderedColumns.map(({ index: col, position: c }) => {
-                      const v = row[col];
-                      const referenceLabel = referenceLabels?.get(
-                        result.columns[col],
-                      )?.[r];
-                      const active =
-                        r >= Math.min(cell[0], anchor[0]) &&
-                        r <= Math.max(cell[0], anchor[0]) &&
-                        c >= Math.min(cell[1], anchor[1]) &&
-                        c <= Math.max(cell[1], anchor[1]);
-                      return (
-                        <ContextMenu.Trigger key={col} asChild>
-                          <div
-                            title={
-                              onEdit
-                                ? "Double-click to edit · Enter to inspect"
-                                : "Double-click to inspect full value"
-                            }
-                            data-app-context-menu
-                            data-grid-cell={`${r}:${c}`}
-                            tabIndex={-1}
-                            onContextMenu={() => {
-                              setContextCell([r, col]);
-                              setCell([r, c]);
-                              setAnchor([r, c]);
-                              onRow?.(row);
+              {result.rows
+                .slice(start, cols.length ? end : start)
+                .map((row, n) => {
+                  const r = start + n;
+                  return (
+                    <div
+                      role="row"
+                      aria-rowindex={r + 2}
+                      key={r}
+                      className={`grid-row ${selected === r || selectedRows.includes(r) ? "selected-row" : ""}`}
+                      style={{
+                        gridTemplateColumns: template,
+                        height: rowHeight,
+                        position: "absolute",
+                        top: r * rowHeight,
+                        width: totalWidth,
+                      }}
+                    >
+                      <div className="row-number">
+                        {onSelectionChange && (
+                          <Checkbox
+                            aria-label={`Select row ${r + 1}`}
+                            onClickCapture={(e) => {
+                              if (e.shiftKey) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const from = Math.min(lastSelected.current, r),
+                                  to = Math.max(lastSelected.current, r);
+                                const next = Array.from(
+                                  { length: to - from + 1 },
+                                  (_, i) => from + i,
+                                );
+                                if (next.length <= 500)
+                                  onSelectionChange?.(next);
+                              } else lastSelected.current = r;
                             }}
-                            style={{ gridColumn: c + 2 }}
-                            role="gridcell"
-                            aria-selected={active}
-                            key={col}
-                            className={`grid-cell ${v.kind === "null" ? "null" : ""} ${["integer", "decimal", "float"].includes(v.kind) ? "numeric" : ""} ${active ? "active-cell" : ""}`}
-                            onClick={(e) => {
-                              setCell([r, c]);
-                              if (!e.shiftKey) setAnchor([r, c]);
-                              onRow?.(row);
-                            }}
-                            onDoubleClick={() =>
-                              onEdit
-                                ? onEdit(row, result.columns[col], v)
-                                : setViewer({
-                                    column: result.columns[col],
-                                    value: v,
-                                  })
+                            checked={selectedRows.includes(r)}
+                            disabled={
+                              selectedRows.length >= 500 &&
+                              !selectedRows.includes(r)
                             }
-                          >
-                            {foreignKeys?.some((fk) =>
-                              fk.columns.includes(result.columns[col]),
-                            ) && onForeignKey ? (
-                              <button
-                                type="button"
-                                className="foreign-key-value"
-                                onKeyDown={(event) => {
-                                  if (
-                                    event.key === "Enter" ||
-                                    event.key === " "
-                                  )
-                                    event.stopPropagation();
-                                }}
-                                disabled={v.kind === "null"}
-                                title={
-                                  referenceLabel !== undefined
-                                    ? `${referenceLabel} · ${display(v)} · Open referenced record`
-                                    : "Open the referenced record"
-                                }
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  const key =
-                                    referenceForeignKeys?.get(
-                                      result.columns[col],
-                                    ) ??
-                                    foreignKeys.find((fk) =>
-                                      fk.columns.includes(result.columns[col]),
-                                    );
-                                  if (
-                                    key &&
-                                    key.columns.every((name) => {
-                                      const index =
-                                        result.columns.indexOf(name);
-                                      return (
-                                        index >= 0 &&
-                                        row[index]?.kind !== "null"
-                                      );
+                            onCheckedChange={(checked) =>
+                              onSelectionChange(
+                                toggleRowSelection(selectedRows, r, checked),
+                              )
+                            }
+                          />
+                        )}
+                        <span>{r + 1}</span>
+                      </div>
+                      {renderedColumns.map(({ index: col, position: c }) => {
+                        const v = row[col];
+                        const referenceLabel = referenceLabels?.get(
+                          result.columns[col],
+                        )?.[r];
+                        const active =
+                          r >= Math.min(cell[0], anchor[0]) &&
+                          r <= Math.max(cell[0], anchor[0]) &&
+                          c >= Math.min(cell[1], anchor[1]) &&
+                          c <= Math.max(cell[1], anchor[1]);
+                        return (
+                          <ContextMenu.Trigger key={col} asChild>
+                            <div
+                              title={
+                                onEdit
+                                  ? "Double-click to edit · Enter to inspect"
+                                  : "Double-click to inspect full value"
+                              }
+                              data-app-context-menu
+                              data-grid-cell={`${r}:${c}`}
+                              tabIndex={-1}
+                              onContextMenu={() => {
+                                setContextCell([r, col]);
+                                setCell([r, c]);
+                                setAnchor([r, c]);
+                                onRow?.(row);
+                              }}
+                              style={{ gridColumn: c + 2 }}
+                              role="gridcell"
+                              aria-selected={active}
+                              key={col}
+                              className={`grid-cell ${v.kind === "null" ? "null" : ""} ${["integer", "decimal", "float"].includes(v.kind) ? "numeric" : ""} ${active ? "active-cell" : ""}`}
+                              onClick={(e) => {
+                                setCell([r, c]);
+                                if (!e.shiftKey) setAnchor([r, c]);
+                                onRow?.(row);
+                              }}
+                              onDoubleClick={() =>
+                                onEdit
+                                  ? onEdit(row, result.columns[col], v)
+                                  : setViewer({
+                                      column: result.columns[col],
+                                      value: v,
                                     })
-                                  )
-                                    onForeignKey(key, row);
-                                }}
-                              >
-                                {(referenceLabel ?? display(v)).slice(0, 240)}
-                              </button>
-                            ) : (
-                              display(v).slice(0, 240)
-                            )}
-                          </div>
-                        </ContextMenu.Trigger>
-                      );
-                    })}
-                  </div>
-                );
-              })}
+                              }
+                            >
+                              {foreignKeys?.some((fk) =>
+                                fk.columns.includes(result.columns[col]),
+                              ) && onForeignKey ? (
+                                <button
+                                  type="button"
+                                  className="foreign-key-value"
+                                  onKeyDown={(event) => {
+                                    if (
+                                      event.key === "Enter" ||
+                                      event.key === " "
+                                    )
+                                      event.stopPropagation();
+                                  }}
+                                  disabled={v.kind === "null"}
+                                  title={
+                                    referenceLabel !== undefined
+                                      ? `${referenceLabel} · ${display(v)} · Open referenced record`
+                                      : "Open the referenced record"
+                                  }
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    const key =
+                                      referenceForeignKeys?.get(
+                                        result.columns[col],
+                                      ) ??
+                                      foreignKeys.find((fk) =>
+                                        fk.columns.includes(
+                                          result.columns[col],
+                                        ),
+                                      );
+                                    if (
+                                      key &&
+                                      key.columns.every((name) => {
+                                        const index =
+                                          result.columns.indexOf(name);
+                                        return (
+                                          index >= 0 &&
+                                          row[index]?.kind !== "null"
+                                        );
+                                      })
+                                    )
+                                      onForeignKey(key, row);
+                                  }}
+                                >
+                                  {(referenceLabel ?? display(v)).slice(0, 240)}
+                                </button>
+                              ) : (
+                                display(v).slice(0, 240)
+                              )}
+                            </div>
+                          </ContextMenu.Trigger>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
             </div>
-            {!result.rows.length && (
+            {!cols.length && (
+              <div className="grid-empty">
+                All columns are hidden. Use Columns to show them.
+              </div>
+            )}
+            {!!cols.length && !result.rows.length && (
               <div className="grid-empty">No rows match this query.</div>
             )}
           </div>
