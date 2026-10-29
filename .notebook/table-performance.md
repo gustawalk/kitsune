@@ -1,0 +1,15 @@
+# Table and inspector responsiveness
+
+- `src/components/DataGrid.tsx:DataGrid()` virtualizes rows and columns using viewport dimensions and stored column widths. Column indices used by keyboard navigation and selection remain indices in the complete visible-column list; virtual cells use explicit CSS grid columns. One shared Radix context menu serves all cells. Cell guidance uses native titles to avoid per-cell tooltip trees.
+- `src/lib/api.ts:useRemote()` accepts an optional retention scope. `src/features/Table.tsx` scopes retained results to connection/schema/table so sorting leaves the grid mounted and keeps horizontal position. Stale results remain inert until a successful response. Other callers immediately hide results from different request keys; request versions reject late responses.
+- `src/lib/api.ts:cacheValue()` estimates browse/record payload size without serializing large field strings on the UI thread.
+- `src-tauri/src/database/mod.rs:incoming_foreign_keys()` caches catalogue relationships for 60 seconds, bounded to 256 tables/16 MiB. `refresh_metadata()` clears this cache alongside existing metadata.
+- `src/lib/record-copy.ts` defines inspector clipboard formatting: full field values and ordinary JSON with lossless string-backed numerics and binary base64.
+
+Validation (2026-10-28): visible Chromium/Vite development fixture with 1,000 rows/65 columns reduced mounted cells from 2,210 to 306; observed click-to-frame samples dropped from roughly 1,060–1,090 ms to 37–45 ms, scrolling from 2,136 ms to 37 ms. These are local development measurements, not production latency guarantees. Browser regressions covered 10,000-row scrolling, far-right sort position, offscreen keyboard navigation, request retention/isolation/races, and inspector clipboard output.
+
+A disposable PostgreSQL 17 restore of the user-referenced Downloads dump had 13,059 deal rows/65 columns. Indexed single-record lookup measured approximately 0.1 ms. The dump was not added to fixtures or logs; no record content belongs in this notebook.
+
+Columns menu: sticky Select all / Unselect all controls update the existing hidden-column preference. With no columns visible, the virtual body collapses and cell copy/edit/keyboard actions are disabled; restoring visibility clamps the selected column. Browser checks covered 5,000 rows/65 columns, individual restore, sticky controls and saved bulk preferences.
+
+SQL result limits: frontend/Rust defaults are 50,000 rows with a configurable maximum of 100,000, including diagnostic measurement limits. `database::MAX_RESULT_BYTES` bounds driver collections and combined script payloads at 64 MiB. SQL truncation notices use a column layout above the grid. Regression tests cover a 13,059-row, >10 MiB collection and explicit diagnostic truncation at a saved 1,000-row limit.
