@@ -300,6 +300,7 @@ try {
     for (const name of [
       "tests::postgres_live_fixture",
       "ipc_tests::postgres_restore_and_diagnostics_fixture",
+      "ipc_tests::postgres_related_record_mutations_enforce_dependencies",
       "ipc_tests::mysql_network_workflow_fixture",
       "ipc_tests::mariadb_network_workflow_fixture",
       ...(sqlserver ? ["ipc_tests::sqlserver_network_workflow_fixture"] : []),

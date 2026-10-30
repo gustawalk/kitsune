@@ -2621,3 +2621,209 @@ fn postgres_vault_password_survives_session_restart() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(internal);
 }
+
+/// Exercise reviewed writes through the real services with FK enforcement enabled.
+#[tokio::test]
+async fn related_record_mutations_enforce_dependencies_and_rollback_cascades() {
+    let (app, path, internal) = app();
+    let external = rusqlite::Connection::open(&path).unwrap();
+    external.execute_batch("PRAGMA foreign_keys=ON;
+      CREATE TABLE parents(id INTEGER PRIMARY KEY);
+      CREATE TABLE children(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES parents(id) ON DELETE RESTRICT);
+      CREATE TABLE cascade_children(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE);
+      CREATE TABLE optional_children(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES parents(id) ON DELETE SET NULL);
+      CREATE TABLE composite_parents(tenant TEXT,n INTEGER,PRIMARY KEY(tenant,n));
+      CREATE TABLE composite_children(id INTEGER PRIMARY KEY,tenant TEXT,n INTEGER,FOREIGN KEY(tenant,n) REFERENCES composite_parents(tenant,n));
+      INSERT INTO parents VALUES(1),(2),(3);
+      INSERT INTO cascade_children VALUES(10,1),(20,2);
+      INSERT INTO optional_children VALUES(10,1);
+      INSERT INTO composite_parents VALUES('a',1),('b',2);").unwrap();
+    connect(&app, &path, false);
+    let int = |n: i32| json!({"kind":"integer","value":n.to_string()});
+    let table = |name: &str| json!({"schema":"","name":name,"kind":"table"});
+    let insert = |name: &str, values: Json| json!({"connectionId":"test","table":table(name),"kind":"insert","values":values});
+    let delete = |ids: Vec<i32>| json!({"connectionId":"test","table":table("parents"),"kind":"delete","rows":ids.iter().map(|n| json!({"key":{"id":int(*n)}})).collect::<Vec<_>>()});
+    let commit = |request: Json| -> Result<Json, Error> {
+        let review = call(&app, "preview_table_mutation", request)?;
+        call(
+            &app,
+            "commit_table_mutation",
+            json!({"connectionId":"test","token":review["token"]}),
+        )
+    };
+    let count = |name: &str| {
+        external
+            .query_row(&format!("SELECT COUNT(*) FROM {name}"), [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    // Missing parent rejects creation, and a valid parent allows it.
+    assert_eq!(
+        commit(insert(
+            "children",
+            json!({"id":int(1),"parent_id":int(999)})
+        ))
+        .unwrap_err()
+        .code,
+        "SQLITE_CONSTRAINT"
+    );
+    assert_eq!(count("children"), 0);
+    assert_eq!(
+        commit(insert("children", json!({"id":int(1),"parent_id":int(2)}))).unwrap()["affected"],
+        1
+    );
+    // Invalid FK updates roll back; a valid reassignment works.
+    let update = |parent: i32| json!({"connectionId":"test","table":table("children"),"kind":"update","column":"parent_id","value":int(parent),"rows":[{"key":{"id":int(1)},"before":int(2)}]});
+    assert_eq!(commit(update(999)).unwrap_err().code, "SQLITE_CONSTRAINT");
+    assert_eq!(
+        external
+            .query_row("SELECT parent_id FROM children WHERE id=1", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(commit(update(3)).unwrap()["affected"], 1);
+    // A restricted row cancels the whole delete, including earlier cascade effects.
+    assert_eq!(
+        commit(delete(vec![1, 3])).unwrap_err().code,
+        "SQLITE_CONSTRAINT"
+    );
+    assert_eq!(count("parents"), 3);
+    assert_eq!(count("cascade_children"), 2);
+    assert_eq!(
+        external
+            .query_row(
+                "SELECT parent_id FROM optional_children WHERE id=10",
+                [],
+                |r| r.get::<_, Option<i64>>(0)
+            )
+            .unwrap(),
+        Some(1)
+    );
+    assert_eq!(commit(delete(vec![1])).unwrap()["affected"], 1);
+    assert_eq!(count("cascade_children"), 1);
+    assert_eq!(
+        external
+            .query_row(
+                "SELECT parent_id FROM optional_children WHERE id=10",
+                [],
+                |r| r.get::<_, Option<i64>>(0)
+            )
+            .unwrap(),
+        None
+    );
+    // Delete the dependent child before its restricted parent.
+    assert_eq!(commit(json!({"connectionId":"test","table":table("children"),"kind":"delete","rows":[{"key":{"id":int(1)}}]})).unwrap()["affected"],1);
+    assert_eq!(commit(delete(vec![3])).unwrap()["affected"], 1);
+    // Composite FKs must match the same parent, rather than individually valid components.
+    let composite = |tenant: &str, n: i32| {
+        insert(
+            "composite_children",
+            json!({"id":int(1),"tenant":{"kind":"text","value":tenant},"n":int(n)}),
+        )
+    };
+    assert_eq!(
+        commit(composite("a", 2)).unwrap_err().code,
+        "SQLITE_CONSTRAINT"
+    );
+    assert_eq!(commit(composite("a", 1)).unwrap()["affected"], 1);
+    assert_eq!(count("composite_children"), 1);
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(external);
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[tokio::test]
+#[ignore = "Requires libpq and the disposable PostgreSQL fixture on port 55432"]
+async fn postgres_related_record_mutations_enforce_dependencies() {
+    let (app, path, internal) = app();
+    call(&app,"connect",json!({"id":"test","name":"Disposable PG","driver":"postgres","environment":"development","host":"127.0.0.1","port":55432,"database":"kitsune_test","username":"kitsune_test","password":"kitsune_test","sslMode":"disable","readOnly":false})).unwrap();
+    let session = app.state::<AppState>().session("test").unwrap();
+    let query = |sql: &str| {
+        session
+            .db
+            .lock()
+            .unwrap()
+            .query(sql, &[], 100, false, 5)
+            .unwrap()
+    };
+    assert_eq!(
+        query("SELECT marker FROM public.kitsune_fixture_identity").rows[0][0],
+        Value::Text("kitsune-disposable-network-v1".into()),
+        "Refusing to mutate a non-fixture database"
+    );
+    let schema = format!("kitsune_relations_{}", uuid::Uuid::new_v4().simple());
+    query(&format!("CREATE SCHEMA {schema}"));
+    query(&format!(
+        "CREATE TABLE {schema}.parents(id INTEGER PRIMARY KEY)"
+    ));
+    query(&format!(
+        "CREATE TABLE {schema}.children(id INTEGER PRIMARY KEY,parent_id INTEGER NOT NULL REFERENCES {schema}.parents(id) ON DELETE RESTRICT)"
+    ));
+    query(&format!(
+        "CREATE TABLE {schema}.cascaded(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES {schema}.parents(id) ON DELETE CASCADE)"
+    ));
+    query(&format!(
+        "CREATE TABLE {schema}.optional(id INTEGER PRIMARY KEY,parent_id INTEGER REFERENCES {schema}.parents(id) ON DELETE SET NULL)"
+    ));
+    query(&format!("INSERT INTO {schema}.parents VALUES(1),(2),(3)"));
+    query(&format!("INSERT INTO {schema}.cascaded VALUES(1,1),(2,2)"));
+    query(&format!("INSERT INTO {schema}.optional VALUES(1,1)"));
+    let table = |name: &str| json!({"schema":schema,"name":name,"kind":"table"});
+    let int = |n: i32| json!({"kind":"integer","value":n.to_string()});
+    let commit = |request: Json| -> Result<Json, Error> {
+        let review = call(&app, "preview_table_mutation", request)?;
+        call(
+            &app,
+            "commit_table_mutation",
+            json!({"connectionId":"test","token":review["token"]}),
+        )
+    };
+    let insert = |parent: i32| json!({"connectionId":"test","table":table("children"),"kind":"insert","values":{"id":int(1),"parent_id":int(parent)}});
+    let constraint = |error: Error| {
+        assert_eq!(error.code, "POSTGRES");
+        assert!(
+            error.message.contains("23503"),
+            "Expected foreign key violation, got {}",
+            error.message
+        );
+    };
+    constraint(commit(insert(999)).unwrap_err());
+    assert_eq!(commit(insert(2)).unwrap()["affected"], 1);
+    let update = |parent: i32| json!({"connectionId":"test","table":table("children"),"kind":"update","column":"parent_id","value":int(parent),"rows":[{"key":{"id":int(1)},"before":int(2)}]});
+    constraint(commit(update(999)).unwrap_err());
+    assert_eq!(commit(update(3)).unwrap()["affected"], 1);
+    let delete = |ids: Vec<i32>| json!({"connectionId":"test","table":table("parents"),"kind":"delete","rows":ids.iter().map(|n|json!({"key":{"id":int(*n)}})).collect::<Vec<_>>()});
+    constraint(commit(delete(vec![1, 3])).unwrap_err());
+    assert_eq!(
+        query(&format!("SELECT COUNT(*) FROM {schema}.parents")).rows[0][0],
+        Value::Integer("3".into())
+    );
+    assert_eq!(
+        query(&format!("SELECT COUNT(*) FROM {schema}.cascaded")).rows[0][0],
+        Value::Integer("2".into())
+    );
+    assert_eq!(
+        query(&format!("SELECT parent_id FROM {schema}.optional")).rows[0][0],
+        Value::Integer("1".into())
+    );
+    assert_eq!(commit(delete(vec![1])).unwrap()["affected"], 1);
+    assert_eq!(
+        query(&format!("SELECT parent_id FROM {schema}.optional")).rows[0][0],
+        Value::Null
+    );
+    assert_eq!(
+        query(&format!("SELECT COUNT(*) FROM {schema}.cascaded")).rows[0][0],
+        Value::Integer("1".into())
+    );
+    assert_eq!(commit(json!({"connectionId":"test","table":table("children"),"kind":"delete","rows":[{"key":{"id":int(1)}}]})).unwrap()["affected"],1);
+    assert_eq!(commit(delete(vec![3])).unwrap()["affected"], 1);
+    query(&format!("DROP SCHEMA {schema} CASCADE"));
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
