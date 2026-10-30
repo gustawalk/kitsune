@@ -5052,6 +5052,12 @@ html.is-resizing * {
   }
 }
 
+.workspace-tab[data-drop-side="before"] {
+  box-shadow: -3px 0 0 var(--accent);
+}
+.workspace-tab[data-drop-side="after"] {
+  box-shadow: 3px 0 0 var(--accent);
+}
 .restore-blocked-reason {
   display: block;
   flex-basis: 100%;

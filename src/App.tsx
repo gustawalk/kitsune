@@ -1,8 +1,14 @@
+import { ContextMenu } from "radix-ui";
 import { startResize } from "./lib/resize";
 import { useLayoutPreference } from "./lib/layout-preferences";
 import { z } from "zod";
 import { normalizeTheme, resolvedTheme } from "./lib/themes";
-import { tabContext } from "./lib/tabs";
+import {
+  tabContext,
+  tabCloseIds,
+  reorderedTabs,
+  type TabCloseScope,
+} from "./lib/tabs";
 import { modKey } from "./lib/utils";
 import {
   lazy,
@@ -167,6 +173,13 @@ function App() {
   } | null>(null);
   const [watchTarget, setWatchTarget] = useState<WatchTarget>();
   const [closing, setClosing] = useState<Tab>();
+  const closingQueue = useRef<string[]>([]);
+  const [closingBusy, setClosingBusy] = useState(false);
+  const draggingTab = useRef<string | null>(null);
+  const [tabDropTarget, setTabDropTarget] = useState<{
+    id: string;
+    side: "before" | "after";
+  } | null>(null);
   const [deleting, setDeleting] = useState<Connection>();
   const [writeConfirmation, setWriteConfirmation] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -311,14 +324,20 @@ function App() {
       clearInterval(timer);
     };
   }, []);
-  function requestClose(tab: Tab) {
-    if (
-      tab.kind === "query" &&
-      ((tab.sql && tab.sql !== tab.savedSql) ||
-        workspace.transactions[tab.id] === "active")
-    )
-      setClosing(tab);
-    else {
+  function advanceCloseQueue() {
+    while (closingQueue.current.length) {
+      const state = getWorkspace();
+      const id = closingQueue.current.shift();
+      const tab = state.tabs.find((t) => t.id === id);
+      if (!tab) continue;
+      if (
+        tab.kind === "query" &&
+        ((tab.sql && tab.sql !== tab.savedSql) ||
+          state.transactions[tab.id] === "active")
+      ) {
+        setClosing(tab);
+        return;
+      }
       if (tab.kind === "query" && tab.connectionId)
         void api("close_editor_session", {
           connectionId: tab.connectionId,
@@ -327,6 +346,33 @@ function App() {
         }).catch(() => undefined);
       closeTab(tab.id);
     }
+    setClosing(undefined);
+  }
+  function requestCloseTabs(id: string, scope: TabCloseScope) {
+    closingQueue.current = tabCloseIds(getWorkspace().tabs, id, scope);
+    advanceCloseQueue();
+  }
+  function requestClose(tab: Tab) {
+    requestCloseTabs(tab.id, "tab");
+  }
+  function cancelClosing() {
+    if (closingBusy) return;
+    closingQueue.current = [];
+    setClosing(undefined);
+  }
+  function moveTab(id: string, direction: -1 | 1) {
+    const tabs = getWorkspace().tabs;
+    const index = tabs.findIndex((t) => t.id === id);
+    const neighbor = tabs[index + direction];
+    if (neighbor)
+      update({
+        tabs: reorderedTabs(
+          tabs,
+          id,
+          neighbor.id,
+          direction < 0 ? "before" : "after",
+        ),
+      });
   }
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -505,57 +551,164 @@ function App() {
               ref={tabsScrollRef}
               onScroll={updateTabOverflow}
             >
-              {workspace.tabs.map((tab) => {
+              {workspace.tabs.map((tab, tabIndex) => {
                 const Icon = tabIcons[tab.kind];
                 const connection = workspace.connections.find(
                   (c) => c.id === tab.connectionId,
                 );
                 const context = tabContext(tab, connection?.name);
                 return (
-                  <div
-                    className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
-                    key={tab.id}
-                    data-kind={tab.kind}
-                    data-connection-color={connection?.color || undefined}
-                    style={
-                      connection?.color
-                        ? ({ "--tab-tone": connection.color } as CSSProperties)
-                        : undefined
-                    }
-                  >
-                    <button
-                      role="tab"
-                      title={`${tab.title} · ${context}`}
-                      tabIndex={tab.id === workspace.activeTab ? 0 : -1}
-                      aria-selected={tab.id === workspace.activeTab}
-                      onClick={() => update({ activeTab: tab.id })}
-                    >
-                      <Icon size={14} />
-                      <span className="tab-label">
-                        <strong>
-                          {tab.title}
-                          {workspace.transactions[tab.id] === "active"
-                            ? " · TX"
-                            : workspace.transactions[tab.id] === "lost"
-                              ? " · TX lost"
-                              : ""}
-                        </strong>
-                        <small>{context}</small>
-                      </span>
-                      {tab.kind === "query" &&
-                        tab.sql &&
-                        tab.sql !== tab.savedSql && (
-                          <span className="unsaved-dot" />
-                        )}
-                    </button>
-                    <button
-                      className="tab-close"
-                      aria-label={`Close ${tab.title}`}
-                      onClick={() => requestClose(tab)}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
+                  <ContextMenu.Root key={tab.id}>
+                    <ContextMenu.Trigger asChild>
+                      <div
+                        draggable
+                        data-app-context-menu
+                        data-drop-side={
+                          tabDropTarget?.id === tab.id
+                            ? tabDropTarget.side
+                            : undefined
+                        }
+                        onDragStart={(event) => {
+                          if (
+                            (event.target as HTMLElement).closest(".tab-close")
+                          ) {
+                            event.preventDefault();
+                            return;
+                          }
+                          draggingTab.current = tab.id;
+                          event.dataTransfer.effectAllowed = "move";
+                          event.dataTransfer.setData(
+                            "application/x-kitsune-tab",
+                            tab.id,
+                          );
+                        }}
+                        onDragOver={(event) => {
+                          if (
+                            !draggingTab.current ||
+                            draggingTab.current === tab.id
+                          )
+                            return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = "move";
+                          const bounds =
+                            event.currentTarget.getBoundingClientRect();
+                          setTabDropTarget({
+                            id: tab.id,
+                            side:
+                              event.clientX < bounds.left + bounds.width / 2
+                                ? "before"
+                                : "after",
+                          });
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          const source = draggingTab.current;
+                          const bounds =
+                            event.currentTarget.getBoundingClientRect();
+                          if (source)
+                            update({
+                              tabs: reorderedTabs(
+                                getWorkspace().tabs,
+                                source,
+                                tab.id,
+                                event.clientX < bounds.left + bounds.width / 2
+                                  ? "before"
+                                  : "after",
+                              ),
+                            });
+                          draggingTab.current = null;
+                          setTabDropTarget(null);
+                        }}
+                        onDragEnd={() => {
+                          draggingTab.current = null;
+                          setTabDropTarget(null);
+                        }}
+                        className={`workspace-tab ${tab.id === workspace.activeTab ? "active" : ""}`}
+                        key={tab.id}
+                        data-kind={tab.kind}
+                        data-connection-color={connection?.color || undefined}
+                        style={
+                          connection?.color
+                            ? ({
+                                "--tab-tone": connection.color,
+                              } as CSSProperties)
+                            : undefined
+                        }
+                      >
+                        <button
+                          role="tab"
+                          title={`${tab.title} · ${context}`}
+                          tabIndex={tab.id === workspace.activeTab ? 0 : -1}
+                          aria-selected={tab.id === workspace.activeTab}
+                          onClick={() => update({ activeTab: tab.id })}
+                        >
+                          <Icon size={14} />
+                          <span className="tab-label">
+                            <strong>
+                              {tab.title}
+                              {workspace.transactions[tab.id] === "active"
+                                ? " · TX"
+                                : workspace.transactions[tab.id] === "lost"
+                                  ? " · TX lost"
+                                  : ""}
+                            </strong>
+                            <small>{context}</small>
+                          </span>
+                          {tab.kind === "query" &&
+                            tab.sql &&
+                            tab.sql !== tab.savedSql && (
+                              <span className="unsaved-dot" />
+                            )}
+                        </button>
+                        <button
+                          className="tab-close"
+                          aria-label={`Close ${tab.title}`}
+                          onClick={() => requestClose(tab)}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </ContextMenu.Trigger>
+                    <ContextMenu.Portal>
+                      <ContextMenu.Content
+                        className="app-context-menu"
+                        collisionPadding={8}
+                      >
+                        <ContextMenu.Item
+                          disabled={tabIndex === 0}
+                          onSelect={() => moveTab(tab.id, -1)}
+                        >
+                          Move tab left
+                        </ContextMenu.Item>
+                        <ContextMenu.Item
+                          disabled={tabIndex === workspace.tabs.length - 1}
+                          onSelect={() => moveTab(tab.id, 1)}
+                        >
+                          Move tab right
+                        </ContextMenu.Item>
+                        <ContextMenu.Separator />
+                        {(
+                          [
+                            ["tab", "Close tab"],
+                            ["others", "Close other tabs"],
+                            ["left", "Close tabs to the left"],
+                            ["right", "Close tabs to the right"],
+                            ["all", "Close all tabs"],
+                          ] as const
+                        ).map(([scope, label]) => (
+                          <ContextMenu.Item
+                            key={scope}
+                            disabled={
+                              !tabCloseIds(workspace.tabs, tab.id, scope).length
+                            }
+                            onSelect={() => requestCloseTabs(tab.id, scope)}
+                          >
+                            {label}
+                          </ContextMenu.Item>
+                        ))}
+                      </ContextMenu.Content>
+                    </ContextMenu.Portal>
+                  </ContextMenu.Root>
                 );
               })}
             </div>
@@ -723,21 +876,27 @@ function App() {
       {closing && (
         <Dialog
           open
-          onClose={() => setClosing(undefined)}
+          onClose={cancelClosing}
           title={
             workspace.transactions[closing.id] === "active"
               ? "Close an active transaction?"
               : "Close unsaved query?"
           }
-          description="Closing ends this SQL session and discards uncommitted work. Save query text first with Ctrl/Cmd+S if needed."
+          description={`${closing.title}: closing ends this SQL session and discards uncommitted work. Save query text first with Ctrl/Cmd+S if needed.${closingQueue.current.length ? ` ${closingQueue.current.length} more tab(s) remain to be checked. Keep editing cancels the remaining close operation.` : ""}`}
         >
           <footer>
-            <Button variant="secondary" onClick={() => setClosing(undefined)}>
+            <Button
+              variant="secondary"
+              disabled={closingBusy}
+              onClick={cancelClosing}
+            >
               Keep editing
             </Button>
             <Button
               variant="destructive"
+              disabled={closingBusy}
               onClick={() => {
+                setClosingBusy(true);
                 void (
                   closing.connectionId
                     ? api("close_editor_session", {
@@ -749,9 +908,10 @@ function App() {
                 )
                   .then(() => {
                     closeTab(closing.id);
-                    setClosing(undefined);
+                    advanceCloseQueue();
                   })
-                  .catch((e) => notify(errorMessage(e), true));
+                  .catch((e) => notify(errorMessage(e), true))
+                  .finally(() => setClosingBusy(false));
               }}
             >
               Close query
