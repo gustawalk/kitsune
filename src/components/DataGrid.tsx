@@ -1,3 +1,4 @@
+import { copyRowsJson, jsonSelectionRows } from "../lib/record-copy";
 import { startResize } from "../lib/resize";
 import type { ReferenceLabels } from "../lib/reference-values";
 import { ContextMenu } from "radix-ui";
@@ -57,6 +58,7 @@ interface Props {
   descending?: boolean;
   actions?: React.ReactNode;
 }
+const emptyRowSelection: number[] = [];
 export function DataGrid({
   result,
   busy = false,
@@ -67,7 +69,7 @@ export function DataGrid({
   onWatch,
   onDeleteRows,
   density = "compact",
-  selectedRows = [],
+  selectedRows = emptyRowSelection,
   onSelectionChange,
   onRow,
   foreignKeys,
@@ -214,6 +216,11 @@ export function DataGrid({
       }));
     startResize(event, move);
   }
+  const jsonRows = useMemo(
+    () =>
+      jsonSelectionRows(result.rows.length, selectedRows, cell[0], anchor[0]),
+    [result.rows.length, selectedRows, cell[0], anchor[0]],
+  );
   function copySelection() {
     const minRow = Math.min(cell[0], anchor[0]),
       maxRow = Math.max(cell[0], anchor[0]);
@@ -365,22 +372,19 @@ export function DataGrid({
           <ContextMenu.Item
             onSelect={() =>
               void copyFeedback(
-                JSON.stringify(
-                  new Set(result.columns).size === result.columns.length
-                    ? Object.fromEntries(
-                        result.columns.map((name, i) => [name, row[i]]),
-                      )
-                    : {
-                        columns: result.columns,
-                        values: row,
-                      },
-                  null,
-                  2,
+                copyRowsJson(
+                  result,
+                  selectedRows.length && !selectedRows.includes(r)
+                    ? [r]
+                    : jsonRows,
                 ),
               )
             }
           >
-            Copy row as typed JSON
+            {(selectedRows.length && !selectedRows.includes(r)) ||
+            jsonRows.length === 1
+              ? "Copy row as JSON"
+              : `Copy ${jsonRows.length} rows as JSON`}
           </ContextMenu.Item>
           <ContextMenu.Item
             onSelect={() =>
@@ -482,25 +486,18 @@ export function DataGrid({
           <Button
             variant="ghost"
             size="sm"
-            disabled={!result.rows[cell[0]]}
-            onClick={() => {
-              const row = result.rows[cell[0]];
-              if (row)
-                void copyFeedback(
-                  JSON.stringify(
-                    new Set(result.columns).size === result.columns.length
-                      ? Object.fromEntries(
-                          result.columns.map((c, i) => [c, row[i]]),
-                        )
-                      : { columns: result.columns, values: row },
-                    null,
-                    2,
-                  ),
-                );
-            }}
+            disabled={!jsonRows.length}
+            title={
+              jsonRows.length > 1
+                ? `Copy ${jsonRows.length} selected rows as a JSON array, including all columns`
+                : "Copy the complete row as JSON, including all columns"
+            }
+            onClick={() => void copyFeedback(copyRowsJson(result, jsonRows))}
           >
             <Braces size={13} />
-            Row JSON
+            {jsonRows.length > 1
+              ? `Rows JSON (${jsonRows.length})`
+              : "Row JSON"}
           </Button>
           <details className="column-menu">
             <summary>
@@ -744,8 +741,15 @@ export function DataGrid({
                               tabIndex={-1}
                               onContextMenu={() => {
                                 setContextCell([r, col]);
-                                setCell([r, c]);
-                                setAnchor([r, c]);
+                                if (!(
+                                  r >= Math.min(cell[0], anchor[0]) &&
+                                  r <= Math.max(cell[0], anchor[0]) &&
+                                  c >= Math.min(cell[1], anchor[1]) &&
+                                  c <= Math.max(cell[1], anchor[1])
+                                )) {
+                                  setCell([r, c]);
+                                  setAnchor([r, c]);
+                                }
                                 onRow?.(row);
                               }}
                               style={{ gridColumn: c + 2 }}
