@@ -1079,7 +1079,7 @@ async fn captured_restore_is_atomic_conflict_checked_and_preserves_excluded_fiel
     );
     let mut query = event.clone();
     query.id = uuid::Uuid::new_v4().to_string();
-    query.restore_source.as_mut().unwrap().watch_kind = "query".into();
+    query.restore_source.as_mut().unwrap().watch_kind = "unknown".into();
     app.state::<AppState>().storage.event(&query).unwrap();
     assert_eq!(
         call(&app, "restore_eligibility", json!({"eventId":query.id})).unwrap()["code"],
@@ -2729,6 +2729,152 @@ async fn related_record_mutations_enforce_dependencies_and_rollback_cascades() {
     );
     assert_eq!(commit(composite("a", 1)).unwrap()["affected"], 1);
     assert_eq!(count("composite_children"), 1);
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(external);
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn query_watch_with_identity_captures_joined_values_before_and_after() {
+    let (app, path, internal) = app();
+    let external = rusqlite::Connection::open(&path).unwrap();
+    external.execute_batch("CREATE TABLE customers(id INTEGER PRIMARY KEY,name TEXT NOT NULL); CREATE TABLE deals(id INTEGER PRIMARY KEY,customer_id INTEGER REFERENCES customers(id),status TEXT,note TEXT); INSERT INTO customers VALUES(1,'Original customer'); INSERT INTO deals VALUES(1,1,'pending',NULL);").unwrap();
+    connect(&app, &path, false);
+    call(&app,"save_watch",json!({"id":"joined","name":"Joined deals","connectionId":"test","kind":"query","table":{"schema":"","name":"deals","kind":"table"},"sql":"SELECT d.id,d.status,d.note,c.name AS customer_name FROM deals d JOIN customers c ON d.customer_id=c.id","intervalSeconds":2,"capture":"full","notifications":false})).unwrap();
+    call(&app,"save_watch",json!({"id":"direct","name":"Restorable deals","connectionId":"test","kind":"query","table":{"schema":"","name":"deals","kind":"table"},"sql":"SELECT id,status,note FROM deals","intervalSeconds":2,"capture":"full","notifications":false})).unwrap();
+    call(
+        &app,
+        "watch_action",
+        json!({"id":"direct","action":"start"}),
+    )
+    .unwrap();
+    call(
+        &app,
+        "watch_action",
+        json!({"id":"joined","action":"start"}),
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let events = call(&app, "events", json!({})).unwrap();
+        if ["joined", "direct"].iter().all(|id| {
+            events
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["watchId"] == *id && e["eventType"] == "baselineCaptured")
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Baseline was not captured: {events}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    external.execute_batch("BEGIN;UPDATE customers SET name='Renamed customer' WHERE id=1; UPDATE deals SET status='paid',note='' WHERE id=1;COMMIT;").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let event = loop {
+        let events = call(&app, "events", json!({"watchId":"joined"})).unwrap();
+        if let Some(event) = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["eventType"] == "recordChanged")
+        {
+            break event.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Joined update was not captured: {events}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(event["record"]["key"]["id"]["value"], "1");
+    let changes = event["changes"].as_array().unwrap();
+    let name = changes
+        .iter()
+        .find(|c| c["column"] == "customer_name")
+        .unwrap();
+    assert_eq!(name["before"]["value"], "Original customer");
+    assert_eq!(name["after"]["value"], "Renamed customer");
+    let note = changes.iter().find(|c| c["column"] == "note").unwrap();
+    assert_eq!(note["before"]["kind"], "null");
+    assert_eq!(note["after"]["value"], "");
+    assert_eq!(event["beforeState"].as_array().unwrap().len(), 4);
+    assert_eq!(event["afterState"].as_array().unwrap().len(), 4);
+    assert!(
+        event["restoreSource"].is_null(),
+        "Joined projection must remain non-restorable"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let direct = loop {
+        let events = call(&app, "events", json!({"watchId":"direct"})).unwrap();
+        if let Some(e) = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["eventType"] == "recordChanged")
+        {
+            break e.clone();
+        }
+        assert!(Instant::now() < deadline, "Direct change was not captured");
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    assert_eq!(direct["restoreSource"]["watchKind"], "query");
+    let preview = call(&app, "preview_restore", json!({"eventId":direct["id"]})).unwrap();
+    call(&app,"commit_restore",json!({"connectionId":"test","token":preview["token"],"operationId":"direct-query-restored"})).unwrap();
+    assert_eq!(
+        external
+            .query_row("SELECT status FROM deals", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "pending"
+    );
+    assert_eq!(
+        external
+            .query_row("SELECT note FROM deals", [], |r| r
+                .get::<_, Option<String>>(0))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        external
+            .query_row("SELECT name FROM customers", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "Renamed customer"
+    );
+    // No-identity mode deliberately reports result membership, never fabricates a pair.
+    let state = app.state::<AppState>();
+    let watch = state
+        .storage
+        .list::<Watch>("watches")
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == "joined")
+        .unwrap();
+    let before: Event = serde_json::from_value(event).unwrap();
+    let result = |fields: Vec<ObservedField>| ResultSet {
+        columns: fields.iter().map(|f| f.column.clone()).collect(),
+        rows: vec![fields.into_iter().map(|f| f.value).collect()],
+        ..ResultSet::empty()
+    };
+    let a = crate::monitor::snapshot(&watch, result(before.before_state.unwrap()), None).unwrap();
+    let b = crate::monitor::snapshot(&watch, result(before.after_state.unwrap()), None).unwrap();
+    let membership = crate::monitor::differences(&watch, &a, &b);
+    assert_eq!(membership.len(), 2);
+    assert!(
+        membership
+            .iter()
+            .all(|e| ["resultEntered", "resultLeft"].contains(&e.event_type.as_str()))
+    );
+    call(
+        &app,
+        "watch_action",
+        json!({"id":"joined","action":"pause"}),
+    )
+    .unwrap();
     call(&app, "disconnect", json!({"id":"test"})).unwrap();
     drop(external);
     drop(app);

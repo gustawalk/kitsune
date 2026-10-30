@@ -101,8 +101,10 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
             "Only full-value observations can restore data. Metadata-only history has no saved values.",
         ));
     }
-    let source=event.restore_source.as_ref().ok_or_else(||error("RESTORE_LEGACY","This older event has no restore provenance. New full-value observations will record it."))?;
-    if !["record", "table"].contains(&source.watch_kind.as_str()) {
+    let source=event.restore_source.as_ref().ok_or_else(||error("RESTORE_LEGACY","This event has no verified source table. Capture a new change with a record/table watch, or a simple SELECT of direct columns from the schema-qualified identity table."))?;
+    if !["record", "table", "query"].contains(&source.watch_kind.as_str())
+        || (source.watch_kind == "query" && event.event_type != "recordChanged")
+    {
         return Err(error(
             "RESTORE_SOURCE",
             "Query projections cannot establish a restorable source record.",

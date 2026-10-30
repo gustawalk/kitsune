@@ -34,10 +34,8 @@ export function restoreBlockedReason(event: ChangeEvent): string | undefined {
   if (event.capture !== "full")
     return "Values were not captured for this event.";
   if (!event.restoreSource)
-    return "This older event has no restore provenance.";
+    return "This event has no verified source table. Use a record/table watch, or a SELECT of direct columns from its schema-qualified table, then capture a new change.";
   if (!event.record) return "No reliable record identity was captured.";
-  if (event.restoreSource.watchKind === "query")
-    return "Query result projections cannot be restored.";
   if (
     !["recordChanged", "recordAppeared", "recordDisappeared"].includes(
       event.eventType,
@@ -51,7 +49,13 @@ export function restoreBlockedReason(event: ChangeEvent): string | undefined {
   )
     return "Record appearance/disappearance requires a complete Record Watch capture.";
 }
-export function RestoreEvent({ event }: { event: ChangeEvent }) {
+export function RestoreEvent({
+  event,
+  explain = false,
+}: {
+  event: ChangeEvent;
+  explain?: boolean;
+}) {
   const workspace = useWorkspace();
   const [open, setOpen] = useState(false);
   const [done, setDone] = useState(false);
@@ -80,6 +84,9 @@ export function RestoreEvent({ event }: { event: ChangeEvent }) {
         <Undo2 size={13} />
         Restore…
       </Button>
+      {explain && reason && (
+        <span className="restore-blocked-reason">{reason}</span>
+      )}
       {open && (
         <RestoreDialog
           event={event}

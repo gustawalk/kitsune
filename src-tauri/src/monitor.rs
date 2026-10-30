@@ -199,11 +199,19 @@ pub fn differences(watch: &Watch, before: &Snapshot, after: &Snapshot) -> Vec<Ev
             connection_id: watch.connection_id.clone(),
             observed_at: chrono::Utc::now().to_rfc3339(),
             event_type: event_type.into(),
-            summary: format!(
-                "{} field{} observed changing",
-                changes.len(),
-                if changes.len() == 1 { "" } else { "s" }
-            ),
+            summary: match event_type {
+                "recordAppeared" => "Record appeared since the previous observation.".into(),
+                "recordDisappeared" => "Record disappeared since the previous observation.".into(),
+                "resultEntered" => {
+                    "Row entered the watched result; no previous matching row.".into()
+                }
+                "resultLeft" => "Row left the watched result; no newer matching row.".into(),
+                _ => format!(
+                    "{} field{} observed changing",
+                    changes.len(),
+                    if changes.len() == 1 { "" } else { "s" }
+                ),
+            },
             before_state: if watch.capture == "full" {
                 old.map(|row| {
                     before
@@ -339,16 +347,18 @@ pub async fn run<R: tauri::Runtime>(
             };
             let mut observation = snapshot(&config, result, metadata.as_ref())?;
             if config.capture == "full"
-                && config.kind != "query"
                 && let Some(metadata) = &metadata
+                && (config.kind != "query"
+                    || restorable_query(&config.sql, metadata, &session.config.driver))
             {
                 observation.source = Some(RestoreSource {
                     watch_kind: config.kind.clone(),
                     schema_fingerprint: db.restore_schema(&metadata.table)?,
-                    complete: metadata
-                        .columns
-                        .iter()
-                        .all(|c| observation.columns.contains(&c.name)),
+                    complete: config.kind != "query"
+                        && metadata
+                            .columns
+                            .iter()
+                            .all(|c| observation.columns.contains(&c.name)),
                 });
             }
             Ok(observation)
@@ -377,6 +387,12 @@ pub async fn run<R: tauri::Runtime>(
                 }
                 if let Some(previous) = &baseline {
                     events.extend(differences(&watch, previous, &current));
+                } else {
+                    events.push(lifecycle(
+                        &watch,
+                        "baselineCaptured",
+                        &format!("Baseline ready: {} row(s). Future observations will be compared with this state. No earlier values are available.", current.records.len()),
+                    ));
                 }
                 baseline = Some(current);
                 failures = 0;
@@ -699,5 +715,141 @@ mod capture_regressions {
             events[0].after_state.as_ref().unwrap()[0].column,
             events[0].after_state.as_ref().unwrap()[1].column
         );
+    }
+}
+
+/// Only direct, schema-qualified base-table columns may become write-back history.
+/// Query membership still never proves a database insert/delete.
+fn restorable_query(sql: &str, metadata: &Metadata, driver: &str) -> bool {
+    use sqlparser::{
+        ast::{Expr, GroupByExpr, SelectItem, SetExpr, Statement, TableFactor},
+        dialect::{
+            Dialect, GenericDialect, MsSqlDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect,
+        },
+        parser::Parser,
+    };
+    let dialect: Box<dyn Dialect> = match driver {
+        "postgres" => Box::new(PostgreSqlDialect {}),
+        "mysql" => Box::new(MySqlDialect {}),
+        "mssql" => Box::new(MsSqlDialect {}),
+        "sqlite" => Box::new(SQLiteDialect {}),
+        _ => Box::new(GenericDialect {}),
+    };
+    let Ok(statements) = Parser::parse_sql(dialect.as_ref(), sql) else {
+        return false;
+    };
+    let [Statement::Query(query)] = statements.as_slice() else {
+        return false;
+    };
+    let SetExpr::Select(select) = query.body.as_ref() else {
+        return false;
+    };
+    if query.with.is_some()
+        || query.for_clause.is_some()
+        || query.format_clause.is_some()
+        || query.settings.is_some()
+        || !query.pipe_operators.is_empty()
+        || select.from.len() != 1
+        || !select.from[0].joins.is_empty()
+        || select.distinct.is_some()
+        || select.into.is_some()
+        || !select.lateral_views.is_empty()
+        || select.having.is_some()
+        || select.qualify.is_some()
+        || select.value_table_mode.is_some()
+        || select.connect_by.is_some()
+        || select.exclude.is_some()
+        || !matches!(&select.group_by, GroupByExpr::Expressions(v,m) if v.is_empty() && m.is_empty())
+    {
+        return false;
+    }
+    let TableFactor::Table {
+        name,
+        alias,
+        args,
+        with_hints,
+        version,
+        with_ordinality,
+        partitions,
+        json_path,
+        sample,
+        ..
+    } = &select.from[0].relation
+    else {
+        return false;
+    };
+    if args.is_some()
+        || !with_hints.is_empty()
+        || version.is_some()
+        || *with_ordinality
+        || !partitions.is_empty()
+        || json_path.is_some()
+        || sample.is_some()
+        || alias.as_ref().is_some_and(|a| !a.columns.is_empty())
+    {
+        return false;
+    }
+    let parts: Option<Vec<_>> = name
+        .0
+        .iter()
+        .map(|p| p.as_ident().map(|i| i.value.as_str()))
+        .collect();
+    let expected: Vec<_> = [metadata.table.schema.as_str(), metadata.table.name.as_str()]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.as_deref() != Some(expected.as_slice()) {
+        return false;
+    }
+    select.projection.iter().all(|p| match p {
+        SelectItem::Wildcard(options) => *options == Default::default(),
+        SelectItem::UnnamedExpr(Expr::Identifier(i)) => {
+            metadata.columns.iter().any(|c| c.name == i.value)
+        }
+        SelectItem::UnnamedExpr(Expr::CompoundIdentifier(parts)) => parts
+            .last()
+            .is_some_and(|i| metadata.columns.iter().any(|c| c.name == i.value)),
+        _ => false,
+    })
+}
+
+#[cfg(test)]
+mod query_restore_tests {
+    use super::*;
+    #[test]
+    fn only_direct_base_table_projections_are_restorable() {
+        let metadata:Metadata=serde_json::from_value(serde_json::json!({"table":{"schema":"public","name":"boards","kind":"table"},"columns":[{"name":"id","dataType":"integer","nullable":false,"defaultValue":null,"pk":1},{"name":"title","dataType":"text","nullable":false,"defaultValue":null,"pk":0}],"indexes":[],"foreignKeys":[],"enums":[]})).unwrap();
+        for sql in [
+            "SELECT * FROM public.boards",
+            "SELECT * FROM \"public\".\"boards\"",
+            "SELECT id,title FROM public.boards WHERE id=1",
+            "SELECT b.id,b.title FROM public.boards b ORDER BY b.id",
+        ] {
+            assert!(restorable_query(sql, &metadata, "postgres"), "{sql}");
+        }
+        assert!(restorable_query(
+            "SELECT * FROM `public`.`boards`",
+            &metadata,
+            "mysql"
+        ));
+        assert!(restorable_query(
+            "SELECT * FROM [public].[boards]",
+            &metadata,
+            "mssql"
+        ));
+        for sql in [
+            "SELECT * FROM boards",
+            "SELECT * FROM public.other",
+            "SELECT id,upper(title) AS title FROM public.boards",
+            "SELECT id,title AS renamed FROM public.boards",
+            "SELECT b.* FROM public.boards b JOIN public.other x ON b.id=x.id",
+            "SELECT id,count(*) FROM public.boards GROUP BY id",
+            "WITH b AS(SELECT * FROM public.boards) SELECT * FROM b",
+            "SELECT * FROM public.boards UNION SELECT * FROM public.boards",
+            "SELECT missing FROM public.boards",
+            "SELECT * FROM public.boards FOR JSON AUTO",
+        ] {
+            assert!(!restorable_query(sql, &metadata, "postgres"), "{sql}");
+        }
     }
 }

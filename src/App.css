@@ -5051,3 +5051,12 @@ html.is-resizing * {
     grid-template-columns: 1fr;
   }
 }
+
+.restore-blocked-reason {
+  display: block;
+  flex-basis: 100%;
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}

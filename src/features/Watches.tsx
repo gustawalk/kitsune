@@ -44,7 +44,13 @@ import {
   type TableRef,
   type Watch,
 } from "../lib/types";
-import { stateComparison, equalValue } from "../lib/timeline";
+import {
+  stateComparison,
+  equalValue,
+  isDataEvent,
+  eventExplanation,
+  missingStateLabel,
+} from "../lib/timeline";
 import { inspectInTable } from "./Detective";
 export type WatchTarget = Partial<RecordRef> & {
   kind?: "record" | "table" | "query";
@@ -407,6 +413,12 @@ export function WatchDialog({
                     : "their original names"}
                   , once per record. <code>SELECT *</code> already includes{" "}
                   {identityColumns(metadata.data).length === 1 ? "it" : "them"}.
+                </p>
+                <p>
+                  To restore changes later, select this table’s columns
+                  directly, using its full schema and table name. Joins, renamed
+                  columns, and calculations can be viewed but cannot be
+                  restored. Use the example query below as a starting point.
                 </p>
               </div>
             ) : (
@@ -1103,6 +1115,7 @@ export function humanEvent(kind: string) {
         resultEntered: "Row entered result",
         resultLeft: "Row left result",
         watchStarted: "Watch started",
+        baselineCaptured: "Baseline ready",
         watchStopped: "Watch stopped",
         observationFailed: "Observation failed",
         observationRecovered: "Observation recovered",
@@ -1114,7 +1127,7 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
   const active = useWorkspace().activeTab === tab.id;
   const [watchId, setWatchId] = useState(tab.watchId || "");
   const [search, setSearch] = useState("");
-  const [kind, setKind] = useState("all");
+  const [kind, setKind] = useState("data");
   const [selectedId, setSelectedId] = useState("");
   const [clearing, setClearing] = useState(false);
   const [limit, setLimit] = useState(300);
@@ -1136,11 +1149,7 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
     events.data?.filter(
       (e) =>
         (kind === "all" ||
-          (kind === "data"
-            ? e.changes.length > 0 ||
-              /Appeared|Disappeared|Entered|Left/.test(e.eventType)
-            : !e.changes.length &&
-              !/Appeared|Disappeared|Entered|Left/.test(e.eventType))) &&
+          (kind === "data" ? isDataEvent(e) : !isDataEvent(e))) &&
         `${e.summary} ${e.eventType} ${e.changes.map((c) => c.column).join(" ")} ${watches.data?.find((w) => w.id === e.watchId)?.name}`
           .toLowerCase()
           .includes(search.toLowerCase()),
@@ -1183,6 +1192,13 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
           </h1>
         </div>
         <div className="spacer" />
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => openTab({ kind: "watches", title: "Live Watch" })}
+        >
+          <Eye size={14} /> Manage watches
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => setClearing(true)}>
           <Trash2 size={13} />
           Clear history
@@ -1197,7 +1213,8 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
         </Button>
       </div>
       <div className="page-description">
-        Changes Kitsune observed, with the context to understand them.
+        Start a Live Watch, wait for its baseline, then change data to compare
+        observations.
         <span>
           <Clock3 size={13} />
           Observation timestamps
@@ -1268,8 +1285,14 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
       ) : !filtered.length ? (
         <Empty
           icon={<History size={28} />}
-          title="No changes captured yet"
-          detail="Start a watch to build a history of observed changes. Polling can miss changes between observations."
+          title={
+            events.data?.length ? "No matching data changes" : "No history yet"
+          }
+          detail={
+            events.data?.length
+              ? "Try All events to see watch status messages, clear your search, or browse older pages. To capture values, edit the watch and enable Save record values on this device?."
+              : "Open Manage watches, start a watch, and wait for its first observation before changing data. Polling can miss changes between observations."
+          }
         />
       ) : (
         <div className="timeline-layout">
@@ -1309,22 +1332,47 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
             <div className="event-detail">
               <div className="detail-heading">
                 <h2>{humanEvent(selected.eventType)}</h2>
-                <RestoreEvent key={selected.id} event={selected} />
+                {isDataEvent(selected) && (
+                  <RestoreEvent key={selected.id} event={selected} explain />
+                )}
                 <Tag>
-                  {selected.capture === "metadata"
-                    ? "Metadata only"
-                    : "Values captured"}
+                  {!isDataEvent(selected)
+                    ? "Watch status"
+                    : selected.capture === "metadata"
+                      ? "Field names only"
+                      : "Values captured"}
                 </Tag>
               </div>
               <p className="muted">
                 Observed {new Date(selected.observedAt).toLocaleString()}
               </p>
               <p className="small">{selected.summary}</p>
-              {selected.capture === "metadata" && (
-                <p className="notice">
-                  Before and after values were not stored for this observation.
-                </p>
+              <p className="context-note">{eventExplanation(selected)}</p>
+              {relatedWatch && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    window.dispatchEvent(
+                      new CustomEvent("kitsune:watch", {
+                        detail: { existing: relatedWatch },
+                      }),
+                    )
+                  }
+                >
+                  <Settings2 size={14} /> Edit watch settings
+                </Button>
               )}
+              {isDataEvent(selected) &&
+                selected.capture === "metadata" &&
+                selected.changes.length > 0 && (
+                  <div className="observed-fields">
+                    <span className="muted">Changed fields</span>
+                    {selected.changes.map((change) => (
+                      <Tag key={change.column}>{change.column}</Tag>
+                    ))}
+                  </div>
+                )}
               {selected.capture === "full" &&
                 (selected.beforeState || selected.afterState) && (
                   <div className="state-comparison-controls">
@@ -1354,39 +1402,49 @@ export function TimelineWorkspace({ tab }: { tab: Tab }) {
                     )}
                   </div>
                 )}
-              {differences.length > 0 && (
-                <div className="diff-table">
-                  <div className="diff-heading">
-                    <span>Field</span>
-                    <span>Before</span>
-                    <span>After</span>
-                  </div>
-                  {differences.map((c, i) => (
-                    <div
-                      className={`diff-row ${equalValue(c.before, c.after) ? "diff-unchanged" : ""}`}
-                      key={i}
-                    >
-                      <strong>{c.column}</strong>
-                      <Tooltip content={"Copy before value"}>
-                        <button
-                          className="diff-before"
-                          onClick={() => void copyFeedback(display(c.before))}
-                        >
-                          {display(c.before).slice(0, 500)}
-                        </button>
-                      </Tooltip>
-                      <Tooltip content={"Copy after value"}>
-                        <button
-                          className="diff-after"
-                          onClick={() => void copyFeedback(display(c.after))}
-                        >
-                          {display(c.after).slice(0, 500)}
-                        </button>
-                      </Tooltip>
+              {isDataEvent(selected) &&
+                selected.capture === "full" &&
+                differences.length > 0 && (
+                  <div className="diff-table">
+                    <div className="diff-heading">
+                      <span>Field</span>
+                      <span>Before</span>
+                      <span>After</span>
                     </div>
-                  ))}
-                </div>
-              )}
+                    {differences.map((c, i) => (
+                      <div
+                        className={`diff-row ${equalValue(c.before, c.after) ? "diff-unchanged" : ""}`}
+                        key={i}
+                      >
+                        <strong>{c.column}</strong>
+                        {(["before", "after"] as const).map((side) =>
+                          c[side] ? (
+                            <Tooltip key={side} content={`Copy ${side} value`}>
+                              <button
+                                className={`diff-${side}`}
+                                aria-label={`Copy ${c.column} ${side} value`}
+                                onClick={() =>
+                                  void copyFeedback(display(c[side]))
+                                }
+                              >
+                                {c[side]?.kind === "text" &&
+                                c[side]?.value === ""
+                                  ? "(empty text)"
+                                  : display(c[side]).slice(0, 500)}
+                              </button>
+                            </Tooltip>
+                          ) : (
+                            <span key={side} className="diff-missing">
+                              {compare
+                                ? "Not captured"
+                                : missingStateLabel(selected, side)}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               {currentRecord && (
                 <div className="watch-controls">
                   <Button

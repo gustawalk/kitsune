@@ -31,7 +31,7 @@ test("partial field capture can be reviewed but membership and incomplete existe
     "not captured",
   );
   expect(restoreBlockedReason({ ...event(), restoreSource: null })).toContain(
-    "older event",
+    "verified source table",
   );
   expect(
     restoreBlockedReason({ ...event(), eventType: "resultLeft" }),
@@ -45,8 +45,19 @@ test("partial field capture can be reviewed but membership and incomplete existe
       restoreSource: {
         watchKind: "query",
         schemaFingerprint: "signature",
-        complete: true,
+        complete: false,
       },
     }),
-  ).toContain("projections");
+  ).toBeUndefined();
+  expect(
+    restoreBlockedReason({
+      ...event(),
+      eventType: "resultEntered",
+      restoreSource: {
+        watchKind: "query",
+        schemaFingerprint: "signature",
+        complete: false,
+      },
+    }),
+  ).toContain("membership");
 });
