@@ -50,6 +50,10 @@ macOS packaging is not verified. See [build and installation details](docs/deskt
 4. Change the record from your application or another client. Open **Live Watch** and **Time Machine** to inspect the captured fields and observation timestamps.
 5. Save the investigation to reopen its references and layout later.
 
+Time Machine opens on **Data changes**; choose **All events** or **Watch lifecycle** to see start, stop, baseline, and failure messages. Wait for **Baseline ready** before making a test change. Choose **Yes · save values for comparison** under **Save record values on this device?** to save values; metadata-only capture saves field names. New query watches default to **Old and new values for each record** and ask which table contains the records. Select the table and include all of its primary key (or non-null unique key) columns with their original names. Each key must appear only once in the result. Choose **Rows added to or removed from the results** for aggregates or queries without a unique row identity. In that mode, an update appears as an old row leaving and a new row entering the result, each with only one state. **Outside result** and **Record absent** describe those missing sides; they are different from values that were not captured. Existing metadata-only events cannot recover omitted values.
+
+Expandable **How to…** guidance in the table, SQL, schema, investigation, and watch workspaces explains the main controls. Icon buttons expose their action on hover and keyboard focus.
+
 Polling can miss intermediate changes, including a row inserted and deleted between polls. Time Machine contains only observations captured by Kitsune; it is not a complete audit log or a database backup.
 
 ### MySQL / MariaDB transactions
@@ -141,3 +145,7 @@ Rust owns connection pools/sessions, execution, metadata, monitoring, diffs, ret
 - [Roadmap and known gaps](docs/roadmap.md)
 
 Kitsune is under active development. The full original 0.1 specification is not certified complete. Remaining work includes broader graphical acceptance/accessibility checks, additional database types and server versions, secure credential-vault integration, macOS builds, and performance measurements across real workloads. Cloud services, telemetry, AI-generated SQL, full CDC, and automatic restoration are outside the current scope.
+
+Workspace tabs can be dragged to reorder them. Right-click a tab for move-left/right and close-tab/others/left/right/all actions. Closing unsaved SQL or an active transaction still asks for confirmation; cancelling stops the remaining bulk close operation.
+
+For Time Machine restoration, start or resume a full-value watch and capture a new change. Direct-column SELECT queries from the schema-qualified identity table can now restore changed fields after review. Joins, calculated/renamed fields, query result entry/exit, and events without verified source metadata cannot be restored as table writes. When restoration is unavailable, the timeline shows the reason. Use the watch dialog’s example query or a record/table watch to capture restorable history.
