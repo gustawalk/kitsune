@@ -860,9 +860,9 @@ function Welcome({ onConnection }: { onConnection: () => void }) {
             <Network size={20} />
             <h3>Explore</h3>
             <p>
-              Start with a record.
+              Open a table and click a cell.
               <br />
-              Follow its relationships.
+              Explore related records in the inspector.
             </p>
           </div>
           <ArrowRight size={15} />
@@ -871,9 +871,9 @@ function Welcome({ onConnection }: { onConnection: () => void }) {
             <Eye size={20} />
             <h3>Observe</h3>
             <p>
-              Watch what changes.
+              Start a watch and wait for its baseline.
               <br />
-              Keep your context.
+              Then make a change to your data.
             </p>
           </div>
           <ArrowRight size={15} />
@@ -882,9 +882,9 @@ function Welcome({ onConnection }: { onConnection: () => void }) {
             <History size={20} />
             <h3>Investigate</h3>
             <p>
-              Review captured changes.
+              Open Time Machine.
               <br />
-              Understand what happened.
+              Compare captured before and after values.
             </p>
           </div>
         </div>

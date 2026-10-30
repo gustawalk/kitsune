@@ -32,3 +32,19 @@ test("disabled tooltip triggers stay keyboard discoverable without native titles
   expect(markup).toContain('class="tooltip-disabled"');
   expect(markup).toContain('tabindex="0"');
 });
+
+test("icon buttons expose their tooltip as a name and labeled icons have tooltips", () => {
+  const titled = renderToString(
+    <Button size="icon" title="Copy SQL">
+      <svg />
+    </Button>,
+  );
+  expect(titled).toContain('aria-label="Copy SQL"');
+  const labeled = renderToString(
+    <Button size="icon" aria-label="Close inspector">
+      <svg />
+    </Button>,
+  );
+  expect(labeled).toContain('data-state="closed"');
+  expect(labeled).toContain('aria-label="Close inspector"');
+});

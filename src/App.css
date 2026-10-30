@@ -4867,3 +4867,187 @@ html.is-resizing * {
     flex-direction: column;
   }
 }
+
+/* Keep contextual guidance compact, with readable steps on demand. */
+.workflow-help {
+  flex: 0 0 auto;
+  margin: 8px 16px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.workflow-help summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-weight: 500;
+}
+.workflow-help summary:hover,
+.workflow-help[open] summary {
+  color: var(--text);
+}
+.workflow-help p {
+  margin: 8px 0 0;
+  max-width: 100ch;
+}
+.diff-missing {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-style: italic;
+}
+.state-comparison-controls {
+  flex-wrap: wrap;
+}
+.timeline-filters {
+  flex-wrap: wrap;
+}
+@media (max-width: 1100px) {
+  .query-toolbar {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 44px;
+  }
+  .workspace-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+.context-note {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.context-note strong {
+  color: var(--text);
+}
+.event-detail .diff-table,
+.event-detail .diff-row > button {
+  font-size: 12px;
+}
+.timeline-event strong {
+  font-size: 12px;
+}
+
+.observed-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.watch-choice-group {
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.watch-choice-group legend {
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 9px;
+}
+.watch-choice-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.watch-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  cursor: pointer;
+}
+.watch-choice.selected {
+  border-color: var(--accent);
+  background: var(--selection);
+}
+.watch-choice:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.watch-choice input {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.watch-choice span {
+  min-width: 0;
+}
+.watch-choice strong {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.watch-choice small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+.watch-key-explanation {
+  padding: 11px 14px;
+  border-left: 3px solid var(--accent);
+  margin: 0 0 16px;
+  background: var(--bg);
+  border-radius: 5px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.watch-key-explanation p {
+  margin-top: 5px;
+  color: var(--muted);
+}
+.watch-key-explanation code {
+  color: var(--text);
+}
+.watch-query-example {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 12px;
+  margin: -5px 0 18px;
+  background: var(--bg);
+}
+.watch-query-example > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.watch-setup-dialog .field > span {
+  font-size: 12px;
+}
+.watch-setup-dialog .field small {
+  font-size: 11px;
+}
+.watch-setup-dialog footer {
+  position: sticky;
+  bottom: -24px;
+  z-index: 1;
+  background: var(--surface);
+  padding-bottom: 16px;
+  box-shadow: 0 -10px 18px var(--surface);
+}
+@media (max-width: 650px) {
+  .watch-choice-options,
+  .watch-setup-dialog .form-grid {
+    grid-template-columns: 1fr;
+  }
+}

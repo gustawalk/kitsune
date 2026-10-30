@@ -1,3 +1,4 @@
+import { WorkflowHelp } from "../components/shared";
 import {
   ReferenceValuePicker,
   useReferenceDisplay,
@@ -476,6 +477,21 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           Refresh
         </Button>
       </div>
+      <WorkflowHelp title="browse and edit this table">
+        <p>
+          Click a cell to open its record inspector. Click a column heading to
+          sort. Use Columns to hide fields, and Filter to narrow the results.
+        </p>
+        <p>
+          To edit data, enable write access for the connection. Double-click a
+          cell or press F2 to edit it; use the row checkboxes for bulk actions.
+          Changes require review.
+        </p>
+        <p>
+          Investigate follows related records. Watch records changes while the
+          watch is running; review them in Time Machine.
+        </p>
+      </WorkflowHelp>
       <div className="workspace-toolbar">
         {tab.kind === "table" && (
           <Button
@@ -868,6 +884,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                             size="sm"
                             variant="ghost"
                             disabled={!selectedIndices.length || rows.loading}
+                            title="Select rows using the checkboxes, then set one field across those rows"
                             onClick={() => mutate("update")}
                           >
                             <Pencil size={13} />
@@ -877,6 +894,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                             size="sm"
                             variant="ghost"
                             disabled={!selectedIndices.length || rows.loading}
+                            title="Select rows using the checkboxes, then review their deletion"
                             onClick={() => mutate("delete")}
                           >
                             <Trash2 size={13} />

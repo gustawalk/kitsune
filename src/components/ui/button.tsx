@@ -22,10 +22,16 @@ export function Button({
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & VariantProps<typeof variants>) {
   return (
-    <Tooltip content={title} disabledTrigger={props.disabled}>
+    <Tooltip
+      content={title || (size === "icon" ? props["aria-label"] : undefined)}
+      disabledTrigger={props.disabled}
+    >
       <button
         className={clsx(variants({ variant, size }), className)}
         {...props}
+        aria-label={
+          props["aria-label"] || (size === "icon" ? title : undefined)
+        }
       />
     </Tooltip>
   );

@@ -1,3 +1,4 @@
+import { WorkflowHelp } from "../components/shared";
 import { startResize } from "../lib/resize";
 import { useLayoutPreference } from "../lib/layout-preferences";
 import { z } from "zod";
@@ -350,6 +351,13 @@ export function SchemaWorkspace({ tab }: { tab: Tab }) {
           Refresh metadata
         </Button>
       </div>
+      <WorkflowHelp title="explore the schema">
+        <p>
+          Search for a table, then select it to see columns, keys, and indexes.
+          Open the diagram to follow declared foreign key relationships. This
+          screen reads metadata without changing your database.
+        </p>
+      </WorkflowHelp>
       <div className="schema-toolbar">
         <nav className="inline-tabs" aria-label="Schema views">
           <button

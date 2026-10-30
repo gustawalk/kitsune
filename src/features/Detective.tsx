@@ -1,3 +1,4 @@
+import { WorkflowHelp } from "../components/shared";
 import { copyFieldText, copyRecordJson } from "../lib/record-copy";
 import { Tooltip } from "../components/ui/tooltip";
 import { arrangeCards } from "../lib/schema";
@@ -158,7 +159,7 @@ export function Inspector({
             }
           >
             <Network size={14} />
-            Investigate
+            Explore relationships
           </Button>
           <Button
             size="sm"
@@ -170,7 +171,7 @@ export function Inspector({
             }
           >
             <Eye size={14} />
-            Watch
+            Watch changes…
           </Button>
           <Button
             size="icon"
@@ -521,6 +522,13 @@ export function DetectiveWorkspace({ tab }: { tab: Tab }) {
           Save investigation
         </Button>
       </div>
+      <WorkflowHelp title="investigate related records">
+        <p>
+          Select a record to inspect its fields. Expand a relationship to add
+          related records to the graph. Drag the background to pan; use
+          Ctrl/Cmd+scroll to zoom. Save investigation keeps the graph for later.
+        </p>
+      </WorkflowHelp>
       <div className="graph-body">
         <div
           className="graph-canvas"

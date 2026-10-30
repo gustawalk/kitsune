@@ -124,3 +124,18 @@ export function Tag({
 }) {
   return <span className={`tag ${tone}`}>{children}</span>;
 }
+
+export function WorkflowHelp({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <details className="workflow-help">
+      <summary>How to {title}</summary>
+      <div>{children}</div>
+    </details>
+  );
+}

@@ -1,3 +1,5 @@
+import { watchQueryExample } from "../lib/watch-setup";
+import { WorkflowHelp } from "../components/shared";
 import { RestoreEvent } from "../components/RestoreEvent";
 import { Tooltip } from "../components/ui/tooltip";
 import { Checkbox } from "../components/ui/checkbox";
@@ -8,7 +10,7 @@ import {
   Clock3,
   Eye,
   History,
-  MoreHorizontal,
+  Table2,
   Network,
   Pause,
   Play,
@@ -33,6 +35,7 @@ import { api, errorMessage, useRemote } from "../lib/api";
 import { notify, openTab, update, useWorkspace } from "../lib/store";
 import {
   display,
+  identityColumns,
   readableKey,
   type ChangeEvent,
   type Metadata,
@@ -101,7 +104,11 @@ export function WatchDialog({
   const [identityTable, setIdentityTable] = useState<TableRef | null>(
     existing?.table || target.table || null,
   );
-  const table = identityTable;
+  const [tracking, setTracking] = useState<"rows" | "membership">(
+    existing?.kind === "query" && !existing.table ? "membership" : "rows",
+  );
+  const table =
+    kind === "query" && tracking === "membership" ? null : identityTable;
   const tables = useRemote<TableRef[]>(
     "tables",
     { connectionId },
@@ -118,6 +125,23 @@ export function WatchDialog({
     setError("");
     try {
       if (!name.trim()) throw new Error("Give your watch a name.");
+      if (kind === "query" && tracking === "rows" && !table)
+        throw new Error(
+          "Choose the table your query returns records from, or choose Rows added to or removed from the results.",
+        );
+      if (
+        kind === "query" &&
+        tracking === "rows" &&
+        table &&
+        (!metadata.data || !identityColumns(metadata.data).length)
+      )
+        throw new Error(
+          "A unique record ID is needed to compare old and new values. Wait for the table details to load, or choose a table with a unique ID.",
+        );
+      if (kind === "query" && !sql.trim())
+        throw new Error(
+          "Enter the SELECT query to watch, or use the example query.",
+        );
       if (!Number.isInteger(interval) || interval < 2 || interval > 3600)
         throw new Error("Choose an interval between 2 and 3,600 seconds.");
       const watch: Watch = {
@@ -190,7 +214,8 @@ export function WatchDialog({
         if (!busy) onClose();
       }}
       title={existing ? "Configure watch" : "Watch for changes"}
-      description={`${connection?.name || "No connection"} · polling observations, not a transactional audit log`}
+      description={connection?.name || "Choose a database connection"}
+      className="watch-setup-dialog"
     >
       <form
         onSubmit={(e) => {
@@ -202,16 +227,10 @@ export function WatchDialog({
           <div className="watch-setup-summary">
             <Eye size={20} />
             <div>
-              <strong>
-                {kind === "record"
-                  ? "Follow one record"
-                  : kind === "table"
-                    ? "Follow a filtered group of records"
-                    : "Follow the results of a query"}
-              </strong>
+              <strong>See changes made while this watch is running</strong>
               <p>
-                Choose what to observe. Kitsune checks for changes without
-                writing to your database.
+                Start watching, wait for the first check, then change your data.
+                Open Time Machine to see what changed.
               </p>
             </div>
           </div>
@@ -237,7 +256,7 @@ export function WatchDialog({
             </Field>
           )}
           <div className="form-grid">
-            <Field label="Watch name">
+            <Field label="Name this watch">
               <input
                 autoFocus
                 required
@@ -245,14 +264,16 @@ export function WatchDialog({
                 onChange={(e) => setName(e.target.value)}
               />
             </Field>
-            <Field label="Watch type">
+            <Field label="What do you want to watch?">
               <Select
                 value={kind}
                 disabled={!!target.key || !!existing}
                 onValueChange={(value) => setKind(value as Watch["kind"])}
               >
-                <SelectItem value="query">Query result</SelectItem>
-                <SelectItem value="table">Filtered table</SelectItem>
+                <SelectItem value="query">Records returned by SQL</SelectItem>
+                <SelectItem value="table">
+                  Records matching a table filter
+                </SelectItem>
                 {(target.key || existing?.kind === "record") && (
                   <SelectItem value="record">Record</SelectItem>
                 )}
@@ -297,11 +318,57 @@ export function WatchDialog({
           {tables.error && <ErrorState error={tables.error} />}
           {metadata.error && <ErrorState error={metadata.error} />}
           {kind === "query" && (
+            <fieldset className="watch-choice-group">
+              <legend>What would you like to see in Time Machine?</legend>
+              <div className="watch-choice-options">
+                <label
+                  className={`watch-choice ${tracking === "rows" ? "selected" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="watch-tracking"
+                    value="rows"
+                    checked={tracking === "rows"}
+                    onChange={() => setTracking("rows")}
+                  />
+                  <span>
+                    <strong>Old and new values for each record</strong>
+                    <small>
+                      For example: “Draft” → “Published”. Choose a table below
+                      so Kitsune can match the same record between checks.
+                    </small>
+                  </span>
+                </label>
+                <label
+                  className={`watch-choice ${tracking === "membership" ? "selected" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name="watch-tracking"
+                    value="membership"
+                    checked={tracking === "membership"}
+                    onChange={() => setTracking("membership")}
+                  />
+                  <span>
+                    <strong>Rows added to or removed from the results</strong>
+                    <small>
+                      Use for totals, grouped queries, or results without a
+                      unique record ID. An edited row can appear as a removal
+                      and an addition.
+                    </small>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+          )}
+          {kind === "query" && tracking === "rows" && (
             <Field
-              label="Use table primary key for row identity (optional)"
-              hint="Include every primary key column in the result. Duplicate keys are rejected; without a key Kitsune compares result membership."
+              label="Which table contains these records?"
+              hint="Choose the table your SQL returns records from."
             >
               <Select
+                required
+                aria-label="Which table contains these records?"
                 value={identityTable ? JSON.stringify(identityTable) : ""}
                 onValueChange={(value) =>
                   setIdentityTable(
@@ -309,9 +376,7 @@ export function WatchDialog({
                   )
                 }
               >
-                <SelectItem value="">
-                  No identity table · compare result membership
-                </SelectItem>
+                <SelectItem value="">Choose the table to track</SelectItem>
                 {tables.data?.map((t) => (
                   <SelectItem
                     key={`${t.schema}:${t.name}`}
@@ -323,20 +388,72 @@ export function WatchDialog({
               </Select>
             </Field>
           )}
+          {kind === "query" &&
+            table &&
+            metadata.data &&
+            (identityColumns(metadata.data).length ? (
+              <div className="watch-key-explanation">
+                <strong>How Kitsune recognizes the same record</strong>
+                <p>
+                  <code>{identityColumns(metadata.data).join(" + ")}</code>{" "}
+                  identifies each record in <strong>{table.name}</strong>. Your
+                  SQL must return{" "}
+                  {identityColumns(metadata.data).length === 1
+                    ? "this column"
+                    : "these columns"}{" "}
+                  with{" "}
+                  {identityColumns(metadata.data).length === 1
+                    ? "its original name"
+                    : "their original names"}
+                  , once per record. <code>SELECT *</code> already includes{" "}
+                  {identityColumns(metadata.data).length === 1 ? "it" : "them"}.
+                </p>
+              </div>
+            ) : (
+              <ErrorState error="This table has no unique record ID. Choose another table, or choose Rows added to or removed from the results above." />
+            ))}
           {kind === "query" && (
             <Field
-              label="Read-only SQL"
-              hint="At most 1,000 rows and 5 MiB per observation. Avoid LIMIT windows if you need stable membership."
+              label="SQL that selects the records to watch"
+              hint="Use SELECT to choose your records. Add a WHERE filter if the query returns more than 1,000 rows. This watch never changes your database."
             >
               <textarea
-                rows={5}
-                placeholder="SELECT * FROM orders WHERE status = 'pending'"
+                rows={3}
+                placeholder={
+                  table
+                    ? watchQueryExample(table, connection?.driver || "postgres")
+                    : tracking === "rows"
+                      ? "Choose a table above for an example, or enter your SELECT query."
+                      : "Enter your SELECT query, such as a total or a grouped result."
+                }
                 className="mono"
                 required
                 value={sql}
                 onChange={(e) => setSql(e.target.value)}
               />
             </Field>
+          )}
+          {kind === "query" && table && (
+            <div className="watch-query-example">
+              <div>
+                <strong>Need a starting query?</strong>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    setSql(
+                      watchQueryExample(
+                        table,
+                        connection?.driver || "postgres",
+                      ),
+                    )
+                  }
+                >
+                  {sql.trim() ? "Replace SQL with example" : "Use this query"}
+                </Button>
+              </div>
+            </div>
           )}
           {kind === "table" &&
             !!(
@@ -386,7 +503,7 @@ export function WatchDialog({
               </div>
             )}
           <div className="form-grid">
-            <Field label="Polling interval (seconds)">
+            <Field label="Check for changes every (seconds)">
               <input
                 type="number"
                 min={2}
@@ -396,41 +513,54 @@ export function WatchDialog({
                 onChange={(e) => setInterval(Number(e.target.value))}
               />
             </Field>
-            <Field label="Historical capture">
+            <Field
+              label="Save record values on this device?"
+              hint={
+                capture === "full"
+                  ? "Values stay in local history. Columns you choose to ignore are not saved."
+                  : "History will show field names only. Old and new values cannot be compared."
+              }
+            >
               <Select
                 value={capture}
                 onValueChange={(value) =>
                   setCapture(value as "full" | "metadata")
                 }
               >
-                <SelectItem value="metadata">Change metadata only</SelectItem>
-                <SelectItem value="full">Before and after values</SelectItem>
-              </Select>
-            </Field>
-          </div>
-          <div className="form-grid">
-            <Field label="Watch group (optional)">
-              <input
-                value={groupName}
-                maxLength={80}
-                placeholder="Checkout investigation"
-                onChange={(e) => setGroupName(e.target.value)}
-              />
-            </Field>
-            <Field label="Stop automatically">
-              <Select value={duration} onValueChange={setDuration}>
-                <SelectItem value="">Until stopped</SelectItem>
-                <SelectItem value="60">After 1 minute</SelectItem>
-                <SelectItem value="600">After 10 minutes</SelectItem>
-                <SelectItem value="3600">After 1 hour</SelectItem>
+                <SelectItem value="metadata">
+                  No · save field names only
+                </SelectItem>
+                <SelectItem value="full">
+                  Yes · save values for comparison
+                </SelectItem>
               </Select>
             </Field>
           </div>
           <details className="watch-advanced">
-            <summary>Privacy and notifications</summary>
+            <summary>
+              Optional settings: groups, notifications, and privacy
+            </summary>
+            <div className="form-grid">
+              <Field label="Watch group (optional)">
+                <input
+                  value={groupName}
+                  maxLength={80}
+                  placeholder="Checkout investigation"
+                  onChange={(e) => setGroupName(e.target.value)}
+                />
+              </Field>
+              <Field label="Stop automatically">
+                <Select value={duration} onValueChange={setDuration}>
+                  <SelectItem value="">Until stopped</SelectItem>
+                  <SelectItem value="60">After 1 minute</SelectItem>
+                  <SelectItem value="600">After 10 minutes</SelectItem>
+                  <SelectItem value="3600">After 1 hour</SelectItem>
+                </Select>
+              </Field>
+            </div>
             <Field
-              label="Excluded columns"
-              hint="Exact column names, separated by commas. Excluded fields are neither compared nor saved."
+              label="Columns to ignore"
+              hint="Enter column names separated by commas. Changes to these columns are not detected or saved."
             >
               <input
                 value={excluded}
@@ -458,14 +588,13 @@ export function WatchDialog({
           {existing && (
             <p className="notice">
               Saving settings pauses this watch. Choose Start watching to begin
-              again with a fresh baseline.
+              again. The first check reads the starting values; only later
+              changes are saved.
             </p>
           )}
           <p className="muted small">
-            The first check establishes a baseline. Pausing and resuming starts
-            a new baseline; changes during the gap are not captured. Changes
-            between polls may be missed. Times indicate when Kitsune observed
-            the result. Oversized observations stop comparison.
+            Keep Kitsune open while watching. Changes between checks can be
+            missed. Each check can read up to 1,000 rows and 5 MiB.
           </p>
         </fieldset>
         {error && <ErrorState error={error} />}
@@ -476,7 +605,7 @@ export function WatchDialog({
             disabled={busy}
             onClick={() => void save(false)}
           >
-            Save paused
+            Save without starting
           </Button>
           <Button
             disabled={
@@ -574,7 +703,7 @@ export function WatchWorkspace() {
           onClick={() => void watches.refresh()}
           aria-label="Refresh watches"
         >
-          <RefreshCw size={14} />
+          <RefreshCw size={14} /> Refresh
         </Button>
         <Button
           size="sm"
@@ -602,6 +731,24 @@ export function WatchWorkspace() {
           Read-only polling
         </span>
       </div>
+      <WorkflowHelp title="capture changes for Time Machine">
+        <p>
+          Start a watch and wait for its first observation to establish a
+          baseline. Then change data from your application or SQL tab. The next
+          poll records the difference.
+        </p>
+        <p>
+          Set Save record values on this device? to Yes to keep values. For
+          query watches, choose a row identity table and include its unique key
+          columns. Without row identity, changes appear as rows entering and
+          leaving the result.
+        </p>
+        <p>
+          Pausing, reconnecting, or changing settings starts a fresh baseline
+          when resumed. Changes between polls or while the app is closed are not
+          recorded.
+        </p>
+      </WorkflowHelp>
       {watches.error && (
         <ErrorState
           error={watches.error}
@@ -944,7 +1091,7 @@ export function WatchWorkspace() {
   );
 }
 function TableIcon() {
-  return <MoreHorizontal size={14} />;
+  return <Table2 size={14} />;
 }
 export function humanEvent(kind: string) {
   return (

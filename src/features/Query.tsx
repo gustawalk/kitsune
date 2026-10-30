@@ -1,3 +1,4 @@
+import { WorkflowHelp } from "../components/shared";
 import { startResize } from "../lib/resize";
 import { PortableSql } from "../components/PortableSql";
 import { QueryDiagnostics } from "../components/QueryDiagnostics";
@@ -371,6 +372,23 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           )}
         </div>
       )}
+      <WorkflowHelp title="run SQL">
+        <p>
+          Run query executes selected SQL, or the statement at your cursor.
+          Press Ctrl/Cmd+Enter. Enable Sequential script to run all statements
+          in order.
+        </p>
+        <p>
+          Explain query opens the execution plan and performance details.
+          Convert SQL adapts supported SQL syntax for another database engine.
+          Neither action runs a write automatically.
+        </p>
+        <p>
+          Watch query periodically compares its results. Choose a row identity
+          table in watch settings to capture before and after values for
+          updates.
+        </p>
+      </WorkflowHelp>
       <div className="query-toolbar">
         <Select
           aria-label="Query connection"
@@ -435,7 +453,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           }}
         >
           <Braces size={14} />
-          Portable SQL
+          Convert SQL…
         </Button>
         <div className="spacer" />
         <label className="check-row inline">
@@ -456,11 +474,11 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
         </Button>
         <Button
           variant="ghost"
-          size="icon"
+          size="sm"
           title="Save query (Ctrl/Cmd+S)"
           onClick={() => setSaving(true)}
         >
-          <Save size={15} />
+          <Save size={15} /> Save query
         </Button>
         {busy ? (
           <Button variant="secondary" size="sm" onClick={() => void cancel()}>
@@ -471,6 +489,11 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           <Button
             size="sm"
             disabled={!connected || !currentSql().trim()}
+            title={
+              !connected
+                ? "Connect this database before running SQL"
+                : "Run selected SQL, or the statement at the cursor (Ctrl/Cmd+Enter)"
+            }
             onClick={() => void execute()}
           >
             <Play size={13} />
@@ -645,7 +668,7 @@ export function QueryWorkspace({ tab }: { tab: Tab }) {
           }}
         >
           <Activity size={14} />
-          Diagnose
+          Explain query…
         </Button>
         <Button
           variant="ghost"
