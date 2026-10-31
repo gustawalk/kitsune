@@ -2435,6 +2435,24 @@ fn local_vault_connection_passwords_do_not_require_an_os_keyring() {
         .unwrap(),
         "test-only-connection-password"
     );
+    assert_eq!(
+        call(
+            &app,
+            "connection_password",
+            json!({"connectionId":"vault-connection","credentialStore":"operatingSystem"})
+        )
+        .unwrap(),
+        "test-only-connection-password"
+    );
+    assert!(
+        call(
+            &app,
+            "connection_password",
+            json!({"connectionId":"missing-entry"})
+        )
+        .unwrap()
+        .is_null()
+    );
     assert!(
         call(
             &app,
@@ -2489,6 +2507,17 @@ fn local_vault_connection_passwords_do_not_require_an_os_keyring() {
         "test-only-connection-password"
     );
     call(&app, "vault_lock", json!({})).unwrap();
+    assert_eq!(
+        call(
+            &app,
+            "connection_password",
+            json!({"connectionId":"vault-connection"})
+        )
+        .unwrap_err()
+        .code,
+        "VAULT_LOCKED"
+    );
+
     assert_eq!(
         call(
             &app,

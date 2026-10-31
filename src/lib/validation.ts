@@ -246,6 +246,7 @@ const vaultStatus = z.object({
   unlocked: z.boolean(),
 });
 const schemas: Record<string, z.ZodType> = {
+  connection_password: z.string().nullable(),
   vault_connection_password: z.string().nullable(),
   vault_status: vaultStatus,
   vault_create: vaultStatus,

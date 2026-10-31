@@ -60,12 +60,15 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
 ) -> Result<Json, Error> {
     let state = app.state::<AppState>();
     match method {
-        "vault_connection_password" => {
+        "connection_password" | "vault_connection_password" => {
             let id = field(&p, "connectionId")?;
             let Some(config) = state.storage.get::<ConnectionConfig>("connections", id)? else {
                 return Ok(Json::Null);
             };
-            if !config.remember_password || config.credential_store != "localVault" {
+            if !config.remember_password
+                || (method == "vault_connection_password"
+                    && config.credential_store != "localVault")
+            {
                 return Ok(Json::Null);
             }
             match crate::security::passwords::load(&state, &config) {

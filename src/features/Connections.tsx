@@ -1,3 +1,4 @@
+import { parseConnectionUrl } from "../lib/connection-url";
 import { PasswordVault } from "../components/PasswordVault";
 import { ConnectionColorPicker } from "../components/ConnectionColorPicker";
 import { Tooltip } from "../components/ui/tooltip";
@@ -28,6 +29,17 @@ export async function refreshConnections() {
   });
   invalidate();
 }
+export async function connectSaved(connection: Connection, password = "") {
+  const result = await api<{ id: string; readOnly: boolean }>("connect", {
+    ...connection,
+    password,
+  });
+  await refreshConnections();
+  update((state) => ({
+    activeConnection: result.id,
+    readOnly: { ...state.readOnly, [result.id]: result.readOnly },
+  }));
+}
 export function ConnectionDialog({
   initial,
   onClose,
@@ -40,8 +52,13 @@ export function ConnectionDialog({
   );
   const [config, setConfig] = useState(initial || emptyConnection());
   const [password, setPassword] = useState("");
+  const [connectionUrl, setConnectionUrl] = useState("");
   const passwordEdited = useRef(false);
   const passwordAutofilled = useRef(false);
+  const passwordRequest = useRef<{
+    key: string;
+    promise: Promise<string | null>;
+  } | null>(null);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [tested, setTested] = useState(false);
@@ -58,10 +75,10 @@ export function ConnectionDialog({
   useEffect(() => {
     let current = true;
     if (
-      !vaultUnlocked ||
       !hasSavedPassword ||
-      config.credentialStore !== "localVault"
+      (config.credentialStore === "localVault" && !vaultUnlocked)
     ) {
+      passwordRequest.current = null;
       if (passwordAutofilled.current) {
         setPassword("");
         passwordAutofilled.current = false;
@@ -69,11 +86,18 @@ export function ConnectionDialog({
       return;
     }
     if (passwordEdited.current || !config.id) return;
-    // Fetch only the current entry after unlock. This response must never use
+    // Fetch only the selected persisted credential. This response must never use
     // the shared request cache or be published as a vault-status event.
-    void api<string | null>("vault_connection_password", {
-      connectionId: config.id,
-    })
+    const key = `${config.id}:${config.credentialStore || "operatingSystem"}`;
+    if (passwordRequest.current?.key !== key) {
+      passwordRequest.current = {
+        key,
+        promise: api<string | null>("connection_password", {
+          connectionId: config.id,
+        }),
+      };
+    }
+    void passwordRequest.current.promise
       .then((saved) => {
         if (current && !passwordEdited.current && saved !== null) {
           setPassword(saved);
@@ -185,6 +209,56 @@ export function ConnectionDialog({
     >
       {step === "choose" ? (
         <div className="database-chooser">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              try {
+                const imported = parseConnectionUrl(connectionUrl);
+                setConfig((current) => ({
+                  ...imported.config,
+                  id: current.id,
+                  name: current.name || imported.config.name,
+                  color: current.color,
+                  environment: current.environment,
+                  readOnly: current.readOnly,
+                  rememberPassword: current.rememberPassword,
+                  credentialStore: current.credentialStore,
+                }));
+                passwordEdited.current = true;
+                passwordAutofilled.current = false;
+                setPassword(imported.password);
+                setConnectionUrl("");
+                setError("");
+                setStep("configure");
+                setTested(false);
+              } catch (failure) {
+                setError(errorMessage(failure));
+              }
+            }}
+          >
+            <Field
+              label="Database URL"
+              hint="Paste a PostgreSQL, MySQL/MariaDB, or SQL Server URL to fill connection details."
+            >
+              <input
+                type="password"
+                aria-label="Database URL"
+                autoComplete="off"
+                spellCheck={false}
+                value={connectionUrl}
+                onChange={(event) => setConnectionUrl(event.target.value)}
+                placeholder="postgresql://user:password@host:5432/database"
+              />
+            </Field>
+            {error && <ErrorState error={error} />}
+            <Button
+              type="submit"
+              variant="secondary"
+              disabled={!connectionUrl.trim()}
+            >
+              Use database URL
+            </Button>
+          </form>
           <p className="database-chooser-label">Choose your database</p>
           <div className="database-driver-grid">
             {(
@@ -235,6 +309,10 @@ export function ConnectionDialog({
                           ? "verify-full"
                           : "prefer",
                   });
+                  passwordEdited.current = false;
+                  passwordAutofilled.current = false;
+                  setPassword("");
+                  setError("");
                   setStep("configure");
                 }}
               >
@@ -365,7 +443,7 @@ export function ConnectionDialog({
                         ? hasSavedPassword
                           ? config.credentialStore === "localVault"
                             ? "Fills automatically when the vault is unlocked. You can edit it to replace it."
-                            : "A password is saved. Leave blank to use it, or enter a replacement."
+                            : "Fills automatically from your system keyring. You can edit it to replace it."
                           : "Enter the database password to save with this connection."
                         : "Session only · never persisted"
                     }
@@ -380,11 +458,7 @@ export function ConnectionDialog({
                       }}
                       autoComplete="current-password"
                       aria-label="Database password"
-                      placeholder={
-                        hasSavedPassword
-                          ? "Saved password · leave blank to reuse"
-                          : "Database password"
-                      }
+                      placeholder="Database password"
                     />
                   </Field>
                   <label className="check-row full">

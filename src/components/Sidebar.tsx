@@ -1,7 +1,8 @@
+import { QuickConnect } from "./QuickConnect";
 import { rankSearch } from "../lib/search";
 import { Tooltip } from "./ui/tooltip";
 import { modKey } from "../lib/utils";
-import { useState, useDeferredValue, useMemo } from "react";
+import { useState, useDeferredValue, useMemo, useCallback } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -41,6 +42,11 @@ export function Sidebar({
   onConnection: (c?: Connection) => void;
 }) {
   const workspace = useWorkspace();
+  const [quickConnection, setQuickConnection] = useState<Connection>();
+  const closeQuickConnect = useCallback(
+    () => setQuickConnection(undefined),
+    [],
+  );
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   const [expanded, setExpanded] = useState<string[]>([]);
@@ -119,32 +125,36 @@ export function Sidebar({
       connectionId: workspace.activeConnection,
     });
   }
-  async function connect(c: Connection) {
-    if (c.driver !== "sqlite") {
+  function connect(c: Connection) {
+    if (workspace.activeConnections.includes(c.id)) {
       onConnection(c);
       return;
     }
-    try {
-      const r = await api<{
-        id: string;
-        readOnly: boolean;
-      }>("connect", c);
-      await refreshConnections();
-      update((s) => ({
-        activeConnection: r.id,
-        readOnly: { ...s.readOnly, [r.id]: r.readOnly },
-      }));
-    } catch (e) {
-      notify(errorMessage(e), true);
-    }
+    setQuickConnection(c);
   }
   return (
     <aside className="sidebar">
-      <div className="brand" onClick={() => update({ activeTab: "" })}>
+      {quickConnection && (
+        <QuickConnect
+          key={quickConnection.id}
+          connection={quickConnection}
+          onClose={closeQuickConnect}
+          onSettings={() => {
+            setQuickConnection(undefined);
+            onConnection(quickConnection);
+          }}
+        />
+      )}
+      <button
+        type="button"
+        className="brand"
+        aria-label="Workspace overview"
+        onClick={() => update({ activeTab: "" })}
+      >
         <img src="/icon.svg" width={25} height={25} alt="Kitsune" />
         <strong>Kitsune</strong>
         <span>狐</span>
-      </div>
+      </button>
       <div className="sidebar-section-heading">
         <span>Connections</span>
         <Button
@@ -208,7 +218,7 @@ export function Sidebar({
                     <Plug size={14} />
                     {workspace.activeConnections.includes(c.id)
                       ? "Reconnect"
-                      : "Connect"}
+                      : "Quick connect"}
                   </DropdownMenu.Item>
                   <DropdownMenu.Item
                     disabled={!workspace.activeConnections.includes(c.id)}
