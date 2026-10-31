@@ -60,8 +60,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
   const [editing, setEditing] = useState<{
     record: import("../lib/types").RecordRef;
     column: string;
-    before: DbValue;
-    nullable: boolean;
+    fields: import("../components/EditCell").EditableField[];
   }>();
   const connection = workspace.connections.find(
     (c) => c.id === tab.connectionId,
@@ -484,7 +483,8 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
         </p>
         <p>
           To edit data, enable write access for the connection. Double-click a
-          cell or press F2 to edit it; use the row checkboxes for bulk actions.
+          cell or press F2 to edit its record, then use Apply changes to save
+          multiple fields together. Use the row checkboxes for bulk actions.
           Changes require review.
         </p>
         <p>
@@ -620,7 +620,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               ? "This table has no reliable unique key; use an explicit SQL query to edit."
               : tab.table.kind !== "table"
                 ? "Views can be inspected here; use an explicit SQL query for changes."
-                : "Double-click a value to edit · F2 edits the selected cell · Enter inspects its full value"}
+                : "Double-click a value or press F2 to edit the record · Apply changes saves all edited fields · Enter inspects its full value"}
         </p>
       )}
       {filtering && metadata.data && (
@@ -955,8 +955,31 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                             key,
                           },
                           column,
-                          before,
-                          nullable: field.nullable,
+                          fields: metadata
+                            .data!.columns.filter(
+                              (c) =>
+                                !c.pk &&
+                                !identityColumns(metadata.data!).includes(
+                                  c.name,
+                                ),
+                            )
+                            .flatMap((c) => {
+                              const value =
+                                row[rows.data!.columns.indexOf(c.name)];
+                              return value &&
+                                !["binary", "array", "unknown"].includes(
+                                  value.kind,
+                                )
+                                ? [
+                                    {
+                                      column: c.name,
+                                      before: value,
+                                      nullable: c.nullable,
+                                      dataType: c.dataType,
+                                    },
+                                  ]
+                                : [];
+                            }),
                         });
                       }
                     : undefined

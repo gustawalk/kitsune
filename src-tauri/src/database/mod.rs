@@ -796,6 +796,13 @@ impl Database {
         before: &Value,
         value: &Value,
     ) -> Result<(), Error> {
+        self.update_cells(record, &[(column, before, value)])
+    }
+    pub fn update_cells(
+        &mut self,
+        record: &RecordRef,
+        changes: &[(&str, &Value, &Value)],
+    ) -> Result<(), Error> {
         self.refresh_metadata();
         self.require_transactional_table(&record.table)?;
         let metadata = self.metadata(&record.table)?;
@@ -821,34 +828,56 @@ impl Database {
                 "Only base tables can be edited.",
             ));
         }
-        let field = metadata
-            .columns
-            .iter()
-            .find(|c| c.name == column)
-            .ok_or_else(|| Error::new("VALIDATION", "The column no longer exists."))?;
-        if keys.iter().any(|key| key == column) || field.pk > 0 {
-            return Err(Error::new(
-                "EDIT_IDENTITY",
-                "Record identity columns cannot be changed in the cell editor.",
-            ));
-        }
-        if matches!(value, Value::Null) && !field.nullable {
-            return Err(Error::new("VALIDATION", "This column does not allow NULL."));
-        }
-        if matches!(
-            before,
-            Value::Binary(_) | Value::Unknown(_) | Value::Array(_)
-        ) || matches!(
-            value,
-            Value::Binary(_) | Value::Unknown(_) | Value::Array(_)
-        ) {
-            return Err(Error::new(
-                "EDIT_UNSUPPORTED",
-                "Binary, array, and custom values require an explicit SQL query.",
-            ));
-        }
         let pg = matches!(&self.driver, Driver::Postgres(_));
-        let mut params = vec![value.clone()];
+        let mut params = Vec::new();
+        let mut assignments = Vec::new();
+        let mut names = std::collections::BTreeSet::new();
+        if changes.is_empty() || changes.len() > 500 {
+            return Err(Error::new(
+                "VALIDATION",
+                "Provide between 1 and 500 field changes.",
+            ));
+        }
+        for &(column, before, value) in changes {
+            if !names.insert(column) {
+                return Err(Error::new(
+                    "VALIDATION",
+                    "A field can only be changed once.",
+                ));
+            }
+            let field = metadata
+                .columns
+                .iter()
+                .find(|c| c.name == column)
+                .ok_or_else(|| Error::new("VALIDATION", "The column no longer exists."))?;
+            if keys.iter().any(|key| key == column) || field.pk > 0 {
+                return Err(Error::new(
+                    "EDIT_IDENTITY",
+                    "Record identity columns cannot be changed in the cell editor.",
+                ));
+            }
+            if matches!(value, Value::Null) && !field.nullable {
+                return Err(Error::new("VALIDATION", "This column does not allow NULL."));
+            }
+            if matches!(
+                before,
+                Value::Binary(_) | Value::Unknown(_) | Value::Array(_)
+            ) || matches!(
+                value,
+                Value::Binary(_) | Value::Unknown(_) | Value::Array(_)
+            ) {
+                return Err(Error::new(
+                    "EDIT_UNSUPPORTED",
+                    "Binary, array, and custom values require an explicit SQL query.",
+                ));
+            }
+            params.push(value.clone());
+            assignments.push(format!(
+                "{} = {}",
+                quote(column),
+                placeholder(pg, params.len())
+            ));
+        }
         let mut predicates = Vec::new();
         for key in &keys {
             params.push(record.key[key].clone());
@@ -859,38 +888,40 @@ impl Database {
             ));
         }
         let identity_predicate = predicates.join(" AND ");
-        if matches!(before, Value::Null) {
-            predicates.push(format!("{} IS NULL", quote(column)));
-        } else {
-            params.push(before.clone());
-            // PostgreSQL JSON has no equality operator; compare its textual representation.
-            let comparison = if pg && field.data_type.eq_ignore_ascii_case("json") {
-                format!("{}::text", quote(column))
+        for &(column, before, _) in changes {
+            if matches!(before, Value::Null) {
+                predicates.push(format!("{} IS NULL", quote(column)));
             } else {
-                quote(column)
-            };
-            predicates.push(format!("{comparison} = {}", placeholder(pg, params.len())));
+                params.push(before.clone());
+                // PostgreSQL JSON has no equality operator; compare its textual representation.
+                let comparison = if pg
+                    && metadata
+                        .columns
+                        .iter()
+                        .any(|f| f.name == column && f.data_type.eq_ignore_ascii_case("json"))
+                {
+                    format!("{}::text", quote(column))
+                } else {
+                    quote(column)
+                };
+                predicates.push(format!("{comparison} = {}", placeholder(pg, params.len())));
+            }
         }
         let sql = format!(
-            "UPDATE {} SET {} = {} WHERE {} AND (SELECT COUNT(*) FROM {} WHERE {}) = 1",
+            "UPDATE {} SET {} WHERE {}{}",
             qualified(&record.table),
-            quote(column),
-            placeholder(pg, 1),
+            assignments.join(", "),
             predicates.join(" AND "),
-            qualified(&record.table),
-            identity_predicate
+            if self.is_mysql() {
+                String::new()
+            } else {
+                format!(
+                    " AND (SELECT COUNT(*) FROM {} WHERE {}) = 1",
+                    qualified(&record.table),
+                    identity_predicate
+                )
+            }
         );
-        let sql = if self.is_mysql() {
-            format!(
-                "UPDATE {} SET {} = {} WHERE {}",
-                qualified(&record.table),
-                quote(column),
-                placeholder(pg, 1),
-                predicates.join(" AND ")
-            )
-        } else {
-            sql
-        };
         let result = self.query_checked(&sql, &params, 1, false, 30, Some(1)).map_err(|e|if e.code=="MUTATION_CONFLICT"{Error::new("EDIT_CONFLICT","This cell changed or disappeared. Refresh and review the current value before editing again.")}else{e})?;
         if result.affected == 0 {
             return Err(Error::new(

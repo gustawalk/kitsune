@@ -1,4 +1,4 @@
-import type { DbValue } from "./types";
+import { display, type DbValue } from "./types";
 export function editedValue(
   kind: DbValue["kind"],
   text: string,
@@ -44,4 +44,27 @@ export function toggleRowSelection(
   return checked
     ? [...new Set([...indices, index])].sort((a, b) => a - b)
     : indices.filter((i) => i !== index);
+}
+
+export interface FieldDraft {
+  text: string;
+  kind: DbValue["kind"];
+  isNull: boolean;
+}
+
+export function recordChanges<T extends { column: string; before: DbValue }>(
+  fields: T[],
+  drafts: Record<string, FieldDraft>,
+): T[] {
+  return fields.filter((f) => {
+    const d = drafts[f.column];
+    return (
+      d &&
+      (d.isNull
+        ? f.before.kind !== "null"
+        : f.before.kind === "null" ||
+          d.text !== display(f.before) ||
+          d.kind !== f.before.kind)
+    );
+  });
 }

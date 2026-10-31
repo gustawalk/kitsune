@@ -2975,6 +2975,87 @@ async fn postgres_related_record_mutations_enforce_dependencies() {
 }
 
 #[tokio::test]
+async fn record_editor_applies_multiple_fields_atomically() {
+    let (app, path, internal) = app();
+    let external = rusqlite::Connection::open(&path).unwrap();
+    external.execute_batch("CREATE TABLE items(id INTEGER PRIMARY KEY,name TEXT NOT NULL,note TEXT); INSERT INTO items VALUES(1,'original',NULL);").unwrap();
+    connect(&app, &path, false);
+    let record = json!({"connectionId":"test","table":{"schema":"","name":"items","kind":"table"},"key":{"id":{"kind":"integer","value":"1"}}});
+    let payload = json!({"record":record,"confirmed":true,"changes":[
+        {"column":"name","before":{"kind":"text","value":"original"},"value":{"kind":"text","value":"renamed"}},
+        {"column":"note","before":{"kind":"null"},"value":{"kind":"text","value":""}}
+    ]});
+    assert_eq!(
+        call(&app, "update_cells", payload.clone()).unwrap()["affected"],
+        2
+    );
+    let values = || {
+        external
+            .query_row("SELECT name,note FROM items", [], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+    };
+    assert_eq!(values(), ("renamed".into(), Some("".into())));
+    let mut stale = payload.clone();
+    stale["changes"][0]["before"]["value"] = json!("renamed");
+    stale["changes"][0]["value"]["value"] = json!("must roll back");
+    assert_eq!(
+        call(&app, "update_cells", stale.clone()).unwrap_err().code,
+        "EDIT_CONFLICT"
+    );
+    assert_eq!(values(), ("renamed".into(), Some("".into())));
+    // A validation failure on the second field must also roll back the first.
+    stale["changes"][1] = json!({"column":"id","before":{"kind":"integer","value":"1"},"value":{"kind":"integer","value":"2"}});
+    assert_eq!(
+        call(&app, "update_cells", stale.clone()).unwrap_err().code,
+        "EDIT_IDENTITY"
+    );
+    assert_eq!(values().0, "renamed");
+    stale["changes"][1] = stale["changes"][0].clone();
+    assert_eq!(
+        call(&app, "update_cells", stale.clone()).unwrap_err().code,
+        "VALIDATION"
+    );
+    stale["confirmed"] = json!(false);
+    assert_eq!(
+        call(&app, "update_cells", stale).unwrap_err().code,
+        "CONFIRMATION_REQUIRED"
+    );
+    external.execute_batch("CREATE TABLE ranges(id INTEGER PRIMARY KEY,start INTEGER,finish INTEGER,CHECK(start<=finish)); INSERT INTO ranges VALUES(1,1,10)").unwrap();
+    let range = json!({"record":{"connectionId":"test","table":{"schema":"","name":"ranges","kind":"table"},"key":{"id":{"kind":"integer","value":"1"}}},"confirmed":true,"changes":[
+        {"column":"start","before":{"kind":"integer","value":"1"},"value":{"kind":"integer","value":"20"}},
+        {"column":"finish","before":{"kind":"integer","value":"10"},"value":{"kind":"integer","value":"30"}}
+    ]});
+    // A single UPDATE lets interdependent fields satisfy constraints together.
+    assert_eq!(call(&app, "update_cells", range).unwrap()["affected"], 2);
+    assert_eq!(
+        external
+            .query_row("SELECT start,finish FROM ranges", [], |r| Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, i64>(1)?
+            )))
+            .unwrap(),
+        (20, 30)
+    );
+    call(
+        &app,
+        "set_write_access",
+        json!({"id":"test","enabled":false}),
+    )
+    .unwrap();
+    assert_eq!(
+        call(&app, "update_cells", payload).unwrap_err().code,
+        "READ_ONLY"
+    );
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(external);
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[tokio::test]
 async fn restore_unrelated_field_allows_cascades_but_guards_referenced_columns_and_triggers() {
     let (app, path, internal) = app();
     let external = rusqlite::Connection::open(&path).unwrap();

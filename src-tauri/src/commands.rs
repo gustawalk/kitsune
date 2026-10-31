@@ -1367,6 +1367,54 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 approval.expected_affected,
             )?)
         }
+        "update_cells" => {
+            #[derive(serde::Deserialize)]
+            struct Change {
+                column: String,
+                before: Value,
+                value: Value,
+            }
+            #[derive(serde::Deserialize)]
+            struct Request {
+                record: RecordRef,
+                changes: Vec<Change>,
+                confirmed: bool,
+            }
+            let request: Request = decode(p)?;
+            if !request.confirmed {
+                return Err(Error::new(
+                    "CONFIRMATION_REQUIRED",
+                    "Review the changes before applying.",
+                ));
+            }
+            let columns: std::collections::BTreeSet<_> =
+                request.changes.iter().map(|c| &c.column).collect();
+            if request.changes.is_empty()
+                || request.changes.len() > 500
+                || columns.len() != request.changes.len()
+            {
+                return Err(Error::new(
+                    "VALIDATION",
+                    "Provide between 1 and 500 distinct field changes.",
+                ));
+            }
+            let session = state.session(&request.record.connection_id)?;
+            let mut db = session.db.lock().map_err(|_| locked())?;
+            if session.read_only.load(Ordering::SeqCst) || !session.connected.load(Ordering::SeqCst)
+            {
+                return Err(Error::new(
+                    "READ_ONLY",
+                    "This connection is read-only or disconnected. Enable write access explicitly before editing.",
+                ));
+            }
+            let changes: Vec<_> = request
+                .changes
+                .iter()
+                .map(|c| (c.column.as_str(), &c.before, &c.value))
+                .collect();
+            db.update_cells(&request.record, &changes)?;
+            Ok(json!({"affected":request.changes.len()}))
+        }
         "update_cell" => {
             #[derive(serde::Deserialize)]
             #[serde(rename_all = "camelCase")]

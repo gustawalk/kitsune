@@ -5066,3 +5066,11 @@ html.is-resizing * {
   font-size: 12px;
   line-height: 1.6;
 }
+
+.record-edit-fields {
+  max-height: 55vh;
+  overflow-y: auto;
+}
+.record-edit-field {
+  padding-bottom: 10px;
+}
