@@ -1,3 +1,4 @@
+import { Updates, VersionStatus } from "./components/Updates";
 import { ContextMenu } from "radix-ui";
 import { startResize } from "./lib/resize";
 import { useLayoutPreference } from "./lib/layout-preferences";
@@ -527,13 +528,6 @@ function App() {
             });
           }}
         >
-          <button
-            className={`home-tab ${!workspace.activeTab ? "active" : ""}`}
-            onClick={() => update({ activeTab: "" })}
-            aria-label="Workspace overview"
-          >
-            <img src="/icon.svg" alt="" width={15} height={15} />
-          </button>
           <div
             className={`tabs-scroll-wrap ${tabOverflow.start ? "has-start-overflow" : ""} ${tabOverflow.end ? "has-end-overflow" : ""}`}
           >
@@ -821,9 +815,10 @@ function App() {
             <ShieldCheck size={12} />
             Local first
           </span>
-          <span>Kitsune 0.1.0</span>
+          <VersionStatus />
         </footer>
       </div>
+      <Updates />
       {workspace.toast && (
         <div
           className={`toast ${workspace.toast.error ? "toast-error" : ""}`}

@@ -51,3 +51,6 @@ src-tauri/tauri.runtime.conf.json
 *.sqlite-shm
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Local updater signing credentials (back up separately)
+.kitsune-signing/

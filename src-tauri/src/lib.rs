@@ -21,7 +21,7 @@ mod window;
 pub fn run() {
     use tauri::Manager;
     let _ = tracing::subscriber::set_global_default(security::SafeLog);
-    let app=tauri::Builder::default().plugin(tauri_plugin_dialog::init()).setup(|app|{commands::setup(app)?;window::restore(app);Ok(())}).on_window_event(|window,event|{if matches!(event,tauri::WindowEvent::CloseRequested{..}){window::save(window);}}).invoke_handler(tauri::generate_handler![commands::api]).build(tauri::generate_context!()).expect("Kitsune could not initialize. Application metadata was preserved; check local file permissions and integrity.");
+    let app=tauri::Builder::default().plugin(tauri_plugin_dialog::init()).plugin(tauri_plugin_updater::Builder::new().build()).plugin(tauri_plugin_process::init()).setup(|app|{commands::setup(app)?;window::restore(app);Ok(())}).on_window_event(|window,event|{if matches!(event,tauri::WindowEvent::CloseRequested{..}){window::save(window);}}).invoke_handler(tauri::generate_handler![commands::api]).build(tauri::generate_context!()).expect("Kitsune could not initialize. Application metadata was preserved; check local file permissions and integrity.");
     app.run(|handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             let state = handle.state::<state::AppState>();
