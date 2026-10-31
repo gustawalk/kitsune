@@ -577,10 +577,7 @@ function App() {
                           }
                           draggingTab.current = tab.id;
                           event.dataTransfer.effectAllowed = "move";
-                          event.dataTransfer.setData(
-                            "application/x-kitsune-tab",
-                            tab.id,
-                          );
+                          event.dataTransfer.setData("text/plain", tab.id);
                         }}
                         onDragOver={(event) => {
                           if (
