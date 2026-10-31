@@ -1,13 +1,17 @@
 # .notebook
 
-Last updated: 2026-10-29
+Last updated: 2026-10-30
+
+- [updater-releases](updater-releases.md) — Signed updates, versioning and platform release routing | flow | updater, releases, signing
+
+- [record-editing](record-editing.md) — Apply multiple record fields in one checked UPDATE | flow | editing, transactions
 
 - [windows-server-checksums](windows-server-checksums.md) — Authenticate MySQL archives before updating CI checksum pins | gotcha | ci, mysql, windows
 - [workspace-validation](workspace-validation.md) — Null saved selections can block connection refresh | gotcha | workspace, validation, sqlite
 
 - [table-performance](table-performance.md) — Grid virtualization, retained sort results, inspector caching and copying | flow | table, inspector, performance
 
-- [password-vault](password-vault.md) — Optional encrypted local password storage without an OS keyring | flow | security, connections, credentials
+- [password-vault](password-vault.md) — Password autofill, quick connect and database URL import | flow | security, connections, credentials
 
 - [sql-editor-shortcuts](sql-editor-shortcuts.md) — CodeMirror command precedence for running SQL | gotcha | sql, keyboard, editor
 

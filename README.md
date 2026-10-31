@@ -11,7 +11,7 @@ Built with Tauri 2, Rust, React, and TypeScript. Database connections, credentia
 ## What you can do
 
 - **Explore:** searchable schema catalog, table structure, indexes, composite keys, and a focused or database-wide relationship diagram.
-- **Browse and edit:** server-side pagination, filters, sorting, column controls, cell editing, row insertion, and reviewed bulk updates/deletes. Editing requires a reliable row identity and supported transactional tables.
+- **Browse and edit:** server-side pagination, filters, sorting, column controls, multi-field record editing with Apply changes, row insertion, and reviewed bulk updates/deletes. Editing requires a reliable row identity and supported transactional tables.
 - **Write SQL:** CodeMirror editor, metadata completion, multiple result sets, query history, saved queries, cancellation, and execution timing. A separate portable SELECT builder previews translations between dialects before opening native SQL.
 - **Referenced values:** hover a foreign-key column header and use its link button to choose a field from the referenced table. Labels apply to the whole page and the choice is saved locally. Choose **Original value** to restore IDs; copying, sorting, editing, and navigation use the original keys.
 - **Investigate:** start with a record and lazily expand declared incoming/outgoing foreign keys. Save references and graph positions locally.
@@ -23,18 +23,18 @@ The interface includes dark/light theme choices, immediate appearance previews, 
 
 ## Database support
 
-| Engine          | Connectivity and exploration                                         | SQL execution                                                       | Important boundaries                                                                                                   |
-| --------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| SQLite          | Existing files, explicit creation, read-only mode, tables/views/keys | Managed statements and scripts                                      | External-file helpers, arbitrary PRAGMAs and manual transaction controls are blocked                                   |
-| PostgreSQL      | libpq, schemas, TLS, native metadata                                 | Managed statements and scripts                                      | Each statement has a managed transaction; manual editor transactions are not available                                 |
-| MySQL / MariaDB | Rust wire-protocol driver, strict TLS, native catalogs               | Native SQL, DDL, routines, multi-table writes, per-tab transactions | Managed edits/restores require InnoDB and reject visible triggers; strict restore also rejects cascading relationships |
-| SQL Server      | Rust TDS driver, native catalogs, TLS                                | Supported reads and transactional DML                               | Restricted credentials required for enforced read-only mode; DDL/routines and historical restore are unavailable       |
+| Engine          | Connectivity and exploration                                         | SQL execution                                                       | Important boundaries                                                                                                    |
+| --------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| SQLite          | Existing files, explicit creation, read-only mode, tables/views/keys | Managed statements and scripts                                      | External-file helpers, arbitrary PRAGMAs and manual transaction controls are blocked                                    |
+| PostgreSQL      | libpq, schemas, TLS, native metadata                                 | Managed statements and scripts                                      | Each statement has a managed transaction; manual editor transactions are not available                                  |
+| MySQL / MariaDB | Rust wire-protocol driver, strict TLS, native catalogs               | Native SQL, DDL, routines, multi-table writes, per-tab transactions | Managed edits/restores require InnoDB and reject visible triggers; restores guard cascading writes to referenced fields |
+| SQL Server      | Rust TDS driver, native catalogs, TLS                                | Supported reads and transactional DML                               | Restricted credentials required for enforced read-only mode; DDL/routines and historical restore are unavailable        |
 
 The automated server fixtures target PostgreSQL 17, MySQL 8.4, MariaDB 11.4, and SQL Server 2022. Support does not imply every vendor extension, version, authentication plugin, or deployment has been certified. DuckDB connectivity is deferred; its portable SQL preview is not a database adapter.
 
 ## Install
 
-The [desktop build workflow](https://github.com/gustawalk/kitsune/actions/workflows/build-desktop.yml) produces Windows and Linux packages. Access to this repository may be required. Successful manual runs retain downloadable artifacts for seven days; tagged builds publish release assets. Check the run’s status before downloading.
+The [desktop build workflow](https://github.com/gustawalk/kitsune/actions/workflows/build-desktop.yml) produces Windows and Linux packages. Successful manual runs retain downloadable artifacts for seven days; tagged builds publish release assets and remove temporary platform artifacts. Check the run’s status before downloading.
 
 - **Windows:** extract the `kitsune-windows` artifact and run `Kitsune_*_x64-setup.exe`. The installer and installed `Kitsune.exe` carry the Kitsune icon and product name. Installers are currently unsigned.
 - **Debian/Ubuntu:** extract `kitsune-linux`, then run `sudo apt install ./Kitsune_0.1.0_amd64.deb`.
@@ -42,13 +42,25 @@ The [desktop build workflow](https://github.com/gustawalk/kitsune/actions/workfl
 
 macOS packaging is not verified. See [build and installation details](docs/desktop-builds.md) and [executed validation](docs/validation.md).
 
+## Updates and releases
+
+Packaged desktop builds check for signed updates at startup. Settings → General shows the installed version, checks again, and displays patch notes.
+Review the release notes and choose **Update Kitsune** to install and restart.
+Save unsaved SQL tabs and finish active transactions first.
+
+Tagged releases publish signed Windows NSIS and Linux Debian/AppImage packages
+plus `updater.json`. See [release setup](docs/desktop-builds.md#updater-signing-and-version-releases)
+for signing secrets and versioning. The first updater-enabled build needs a manual
+installation. Updates download from Kitsune’s public GitHub Releases.
+
 ## Start investigating
 
 1. Add a connection. Use the file picker for SQLite, or enter server settings. Test and connect. Passwords are session-only by default; **Remember password securely** lets you choose the OS credential manager or an encrypted local vault.
-2. Search the sidebar and open a table. Select a record to inspect it, edit a supported cell, or choose **Investigate**.
-3. Expand a declared relationship in Detective. Start a watch on the selected record.
-4. Change the record from your application or another client. Open **Live Watch** and **Time Machine** to inspect the captured fields and observation timestamps.
-5. Save the investigation to reopen its references and layout later.
+2. For server databases, you can paste a connection URL when adding a connection. Double-click a saved connection or choose **Quick connect** to connect without opening its settings. Saved passwords load from the keyring or unlocked local vault; otherwise a compact dialog asks for credentials.
+3. Search the sidebar and open a table. Select a record to inspect it, double-click a supported cell to edit multiple fields and **Apply changes**, or choose **Investigate**.
+4. Expand a declared relationship in Detective. Start a watch on the selected record.
+5. Change the record from your application or another client. Open **Live Watch** and **Time Machine** to inspect the captured fields and observation timestamps.
+6. Save the investigation to reopen its references and layout later.
 
 Time Machine opens on **Data changes**; choose **All events** or **Watch lifecycle** to see start, stop, baseline, and failure messages. Wait for **Baseline ready** before making a test change. Choose **Yes · save values for comparison** under **Save record values on this device?** to save values; metadata-only capture saves field names. New query watches default to **Old and new values for each record** and ask which table contains the records. Select the table and include all of its primary key (or non-null unique key) columns with their original names. Each key must appear only once in the result. Choose **Rows added to or removed from the results** for aggregates or queries without a unique row identity. In that mode, an update appears as an old row leaving and a new row entering the result, each with only one state. **Outside result** and **Record absent** describe those missing sides; they are different from values that were not captured. Existing metadata-only events cannot recover omitted values.
 

@@ -1,6 +1,6 @@
 # Desktop builds
 
-The project is connected to `git@github.com:gustawalk/kitsune.git` with branch `main`. Existing history was absent; the working application was imported without local databases, generated build outputs or test TLS keys. The GitHub repository remains private.
+The project is connected to `git@github.com:gustawalk/kitsune.git` with branch `main`. Existing history was absent; the working application was imported without local databases, generated build outputs or test TLS keys. The GitHub repository is public, allowing token-free updater downloads.
 
 ## Workflow
 
@@ -10,9 +10,9 @@ The project is connected to `git@github.com:gustawalk/kitsune.git` with branch `
 gh workflow run build-desktop.yml --repo gustawalk/kitsune --ref main
 ```
 
-Manual runs produce downloadable Windows and Linux artifacts and do not publish a release. Artifacts are retained for seven days. Pushing a `v*` tag requires matching package, Cargo and Tauri versions and a nonempty `docs/releases/<tag>.md`; only after successful Windows and Linux builds does the workflow publish release downloads. No tag was pushed during setup.
+Manual runs produce downloadable Windows and Linux artifacts and do not publish a release. Manual-run artifacts are retained for seven days; tagged runs delete temporary platform artifacts after publishing the release. Pushing a `v*` tag requires matching package, Cargo and Tauri versions and a nonempty `docs/releases/<tag>.md`; only after successful Windows and Linux builds does the workflow publish release downloads. No tag was pushed during setup.
 
-Current targets are Windows x64 NSIS setup and Linux amd64 Debian/AppImage. macOS, updater manifests and updater signing were not copied: Kitsune has no updater configured, and Kodama's identity, public key and secrets must not be reused. These builds are not Authenticode-signed. Windows trust warnings remain possible until dedicated application-signing credentials are configured.
+Current targets are Windows x64 NSIS setup and Linux amd64 Debian/AppImage. Tagged builds publish signed updates and `updater.json`, using Kitsune’s own signing identity. macOS builds remain deferred. Updater signatures verify downloaded updates; these builds are not Authenticode-signed. Windows trust warnings remain possible until dedicated application-signing credentials are configured.
 
 The workflow pins Bun 1.4.0, uses Cargo's locked dependency graph, caches Rust compilation and pins the vcpkg source revision. Windows client libraries are built from that revision. Linux uses Ubuntu 22.04 to avoid the compatibility floor of builds made on a newer distribution. Hosted system packages and Rust stable can still change; the entire toolchain is not fully reproducible.
 
@@ -55,3 +55,53 @@ Tauri product/window name: **Kitsune**. `mainBinaryName` gives `Kitsune.exe` on 
 Verification outcomes and run links are recorded in validation.md. The current product/footprint assessment is in product-review.md.
 
 MySQL/MariaDB now uses a Rust wire-protocol driver with Rustls, so packaging no longer requires libmariadb. Runtime staging clears stale files first. CI runs live MySQL/MariaDB workflows on Windows using checksum-pinned portable archives, and all four server families on Linux via isolated Docker fixtures. These tests precede packaging; setup verification still checks the installed executable, coral icon, libpq loading and startup.
+
+## Updater signing and version releases
+
+Kitsune uses the same signed-update flow as Kodama, with its own identity and
+`https://github.com/gustawalk/kitsune/releases/latest/download/updater.json`.
+Packaged desktop builds check at startup; Settings → General provides
+manual checks and patch-note history. Installation requires confirmation. Unsaved
+SQL tabs and active SQL transactions must be resolved before updating/restarting.
+The first updater-enabled package must be installed manually; older builds have
+no updater with which to discover it.
+
+The generated local signing identity is in ignored `.kitsune-signing/`:
+`updater.key`, `updater.key.pub`, and `password`. Back up that folder securely
+outside this checkout. The public key is embedded in `src-tauri/tauri.conf.json`.
+Never commit the private key or password. Do not regenerate the key after shipping
+an updater-enabled build: existing installations trust its original public key.
+
+Configure these GitHub Actions secrets for `gustawalk/kitsune` before release or
+manual packaging runs. From this checkout, the following commands read the local
+files without printing their contents:
+
+```sh
+gh secret set KITSUNE_TAURI_SIGNING_PRIVATE_KEY --repo gustawalk/kitsune < .kitsune-signing/updater.key
+gh secret set KITSUNE_TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo gustawalk/kitsune < .kitsune-signing/password
+```
+
+For each stable release:
+
+1. Set the same version in `package.json`, `src-tauri/Cargo.toml`, and
+   `src-tauri/tauri.conf.json`; refresh both dependency lockfiles as needed.
+2. Write `docs/releases/vX.Y.Z.md`. Patch-note history discovers versioned files
+   automatically. Run `bun scripts/check-release.ts` and the normal checks.
+3. Commit the release changes, then push the matching `vX.Y.Z` tag when ready.
+   CI verifies versions/notes and all existing database/packaging checks, signs
+   Windows NSIS and Linux Debian/AppImage packages, and publishes `updater.json`
+   only after both platform jobs pass. Re-running the same tag updates its release
+   assets. The manifest rejects prerelease tags, missing/empty signatures, duplicate
+   installers, and empty artifacts/notes.
+
+The updater manifest uses `windows-x86_64`, `linux-x86_64-appimage`, and
+`linux-x86_64-deb`, so Debian installations never receive AppImage updates.
+Debian updates may request administrator authorization through the system package
+installer. Updater downloads use Kitsune’s public GitHub Releases. No GitHub token is
+embedded in the application.
+
+For a local signed package, export `TAURI_SIGNING_PRIVATE_KEY` as the private-key
+path and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` from the password file, then use the
+normal packaging commands above. For an unsigned development package only, append
+`--config '{"bundle":{"createUpdaterArtifacts":false}}'` to the build command.
+See [Tauri’s updater documentation](https://v2.tauri.app/plugin/updater/).
