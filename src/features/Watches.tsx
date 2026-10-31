@@ -1,3 +1,4 @@
+import { TablePicker } from "../components/TablePicker";
 import { watchQueryExample } from "../lib/watch-setup";
 import { WorkflowHelp } from "../components/shared";
 import { RestoreEvent } from "../components/RestoreEvent";
@@ -298,27 +299,17 @@ export function WatchDialog({
           )}
           {kind === "table" && (
             <Field label="Table to monitor">
-              <Select
-                required
+              <TablePicker
+                key={connectionId}
+                label="Table to monitor"
                 disabled={!!existing || !!target.table}
-                value={table ? JSON.stringify(table) : ""}
-                onValueChange={(v) => {
-                  setIdentityTable(v ? (JSON.parse(v) as TableRef) : null);
+                tables={tables.data?.filter((t) => t.kind === "table") || []}
+                value={table}
+                onChange={(value) => {
+                  setIdentityTable(value);
                   setFilterCol("");
                 }}
-              >
-                <SelectItem value="">Choose a table</SelectItem>
-                {tables.data
-                  ?.filter((t) => t.kind === "table")
-                  .map((t) => (
-                    <SelectItem
-                      key={JSON.stringify(t)}
-                      value={JSON.stringify(t)}
-                    >
-                      {[t.schema, t.name].filter(Boolean).join(".")}
-                    </SelectItem>
-                  ))}
-              </Select>
+              />
             </Field>
           )}
           {tables.error && <ErrorState error={tables.error} />}
@@ -372,26 +363,13 @@ export function WatchDialog({
               label="Which table contains these records?"
               hint="Choose the table your SQL returns records from."
             >
-              <Select
-                required
-                aria-label="Which table contains these records?"
-                value={identityTable ? JSON.stringify(identityTable) : ""}
-                onValueChange={(value) =>
-                  setIdentityTable(
-                    value ? (JSON.parse(value) as TableRef) : null,
-                  )
-                }
-              >
-                <SelectItem value="">Choose the table to track</SelectItem>
-                {tables.data?.map((t) => (
-                  <SelectItem
-                    key={`${t.schema}:${t.name}`}
-                    value={JSON.stringify(t)}
-                  >
-                    {[t.schema, t.name].filter(Boolean).join(".")}
-                  </SelectItem>
-                ))}
-              </Select>
+              <TablePicker
+                key={connectionId}
+                label="Which table contains these records?"
+                tables={tables.data || []}
+                value={identityTable}
+                onChange={setIdentityTable}
+              />
             </Field>
           )}
           {kind === "query" &&

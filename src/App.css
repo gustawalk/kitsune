@@ -5074,3 +5074,8 @@ html.is-resizing * {
 .record-edit-field {
   padding-bottom: 10px;
 }
+
+.table-picker {
+  display: grid;
+  gap: 6px;
+}
