@@ -14,9 +14,9 @@ CREATE TABLE dbo.order_items(order_id BIGINT REFERENCES dbo.orders(id),line_numb
 CREATE TABLE dbo.payments(id BIGINT PRIMARY KEY,order_id BIGINT REFERENCES dbo.orders(id),status NVARCHAR(50),receipt VARBINARY(MAX));
 CREATE TABLE dbo.composite_parent(tenant NVARCHAR(50),code NVARCHAR(50),label NVARCHAR(200),PRIMARY KEY(tenant,code));
 CREATE TABLE dbo.composite_child(id BIGINT PRIMARY KEY,tenant NVARCHAR(50),code NVARCHAR(50),FOREIGN KEY(tenant,code) REFERENCES dbo.composite_parent(tenant,code));
-INSERT INTO dbo.customers VALUES(1,N'Avery Kim',N'avery@example.test');
+INSERT INTO dbo.customers VALUES(1,N'Avery Kim',N'avery@example.test'),(2,N'Sam Rivera',NULL);
 INSERT INTO dbo.products VALUES(100,N'Field notebook',19.95);
-INSERT INTO dbo.orders VALUES(5821,1,N'pending',99999999999999999.123456789,N'{"source":"fixture"}',N'fixture-secret');
+INSERT INTO dbo.orders VALUES(5821,1,N'pending',99999999999999999.123456789,N'{"source":"fixture"}',N'fixture-secret'),(5822,2,N'completed',99999999999999999.123456789,N'{"source":"fixture","nullable":null}',NULL);
 INSERT INTO dbo.order_items VALUES(5821,1,100,2);
 INSERT INTO dbo.payments VALUES(700,5821,N'authorized',0x00FF80);
 INSERT INTO dbo.composite_parent VALUES(N'acme',N'A',N'Composite parent');

@@ -2241,7 +2241,7 @@ async fn sqlserver_network_workflow_fixture() {
         name: "orders".into(),
         kind: "table".into(),
     };
-    crate::tests::assert_keyset_paging(&mut external, order_table.clone(), false);
+    crate::tests::assert_keyset_paging(&mut external, order_table.clone(), true);
     crate::tests::assert_keyset_paging(
         &mut external,
         TableRef {
