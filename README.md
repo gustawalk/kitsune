@@ -11,7 +11,7 @@ Built with Tauri 2, Rust, React, and TypeScript. Database connections, credentia
 ## What you can do
 
 - **Explore:** searchable schema catalog, table structure, indexes, composite keys, and a focused or database-wide relationship diagram.
-- **Browse and edit:** server-side pagination, filters, sorting, column controls, multi-field record editing with Apply changes, row insertion, and reviewed bulk updates/deletes. Editing requires a reliable row identity and supported transactional tables.
+- **Browse and edit:** server-side pagination, filters, sorting, column controls, staged multi-row editing with Apply changes, row insertion, and reviewed bulk updates/deletes. Editing requires a reliable row identity and supported transactional tables.
 - **Write SQL:** CodeMirror editor, metadata completion, multiple result sets, query history, saved queries, cancellation, and execution timing. A separate portable SELECT builder previews translations between dialects before opening native SQL.
 - **Referenced values:** hover a foreign-key column header and use its link button to choose a field from the referenced table. Labels apply to the whole page and the choice is saved locally. Choose **Original value** to restore IDs; copying, sorting, editing, and navigation use the original keys.
 - **Investigate:** start with a record and lazily expand declared incoming/outgoing foreign keys. Save references and graph positions locally.
@@ -57,7 +57,7 @@ installation. Updates download from Kitsune’s public GitHub Releases.
 
 1. Add a connection. Use the file picker for SQLite, or enter server settings. Test and connect. Passwords are session-only by default; **Remember password securely** lets you choose the OS credential manager or an encrypted local vault.
 2. For server databases, you can paste a connection URL when adding a connection. Double-click a saved connection or choose **Quick connect** to connect without opening its settings. Saved passwords load from the keyring or unlocked local vault; otherwise a compact dialog asks for credentials.
-3. Search the sidebar and open a table. Select a record to inspect it, double-click a supported cell to edit multiple fields and **Apply changes**, or choose **Investigate**.
+3. Search the sidebar and open a table. Select a record to inspect it, double-click a supported cell to stage edits across records, then use **Apply changes** above the table, or choose **Investigate**.
 4. Expand a declared relationship in Detective. Start a watch on the selected record.
 5. Change the record from your application or another client. Open **Live Watch** and **Time Machine** to inspect the captured fields and observation timestamps.
 6. Save the investigation to reopen its references and layout later.
