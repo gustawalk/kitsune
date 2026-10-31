@@ -2973,3 +2973,172 @@ async fn postgres_related_record_mutations_enforce_dependencies() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(internal);
 }
+
+#[tokio::test]
+async fn restore_unrelated_field_allows_cascades_but_guards_referenced_columns_and_triggers() {
+    let (app, path, internal) = app();
+    let external = rusqlite::Connection::open(&path).unwrap();
+    external.execute_batch("CREATE TABLE parents(id INTEGER PRIMARY KEY,code TEXT UNIQUE,name TEXT UNIQUE); CREATE TABLE children(id INTEGER PRIMARY KEY,parent_code TEXT REFERENCES parents(code) ON UPDATE CASCADE ON DELETE CASCADE); INSERT INTO parents VALUES(1,'A','new'); INSERT INTO children VALUES(1,'A');").unwrap();
+    connect(&app, &path, false);
+    let table = TableRef {
+        schema: "".into(),
+        name: "parents".into(),
+        kind: "table".into(),
+    };
+    let key = std::collections::BTreeMap::from([("id".into(), Value::Integer("1".into()))]);
+    let fields = |name: &str, code: &str| {
+        observed(&[
+            ("id", Value::Integer("1".into())),
+            ("code", Value::Text(code.into())),
+            ("name", Value::Text(name.into())),
+        ])
+    };
+    let event = captured_event(
+        &app,
+        table.clone(),
+        key.clone(),
+        "recordChanged",
+        Some(fields("old", "A")),
+        Some(fields("new", "A")),
+        true,
+    );
+    let preview = call(&app, "preview_restore", json!({"eventId":event.id})).unwrap();
+    assert!(preview["sql"].as_str().unwrap().contains("SET \"name\""));
+    call(
+        &app,
+        "commit_restore",
+        json!({"connectionId":"test","token":preview["token"],"operationId":"restore-name"}),
+    )
+    .unwrap();
+    assert_eq!(
+        external
+            .query_row("SELECT name FROM parents", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "old"
+    );
+    assert_eq!(
+        external
+            .query_row("SELECT parent_code FROM children", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "A"
+    );
+    let referenced = captured_event(
+        &app,
+        table.clone(),
+        key.clone(),
+        "recordChanged",
+        Some(fields("old", "B")),
+        Some(fields("old", "A")),
+        true,
+    );
+    assert_eq!(
+        call(&app, "preview_restore", json!({"eventId":referenced.id}))
+            .unwrap_err()
+            .code,
+        "RESTORE_SIDE_EFFECTS"
+    );
+    let appeared = captured_event(
+        &app,
+        table.clone(),
+        key.clone(),
+        "recordAppeared",
+        None,
+        Some(fields("old", "A")),
+        true,
+    );
+    assert_eq!(
+        call(&app, "preview_restore", json!({"eventId":appeared.id}))
+            .unwrap_err()
+            .code,
+        "RESTORE_SIDE_EFFECTS"
+    );
+    // Metadata is checked again at commit, including relationships added after preview.
+    external
+        .execute_batch("UPDATE parents SET name='new'")
+        .unwrap();
+    let event = captured_event(
+        &app,
+        table.clone(),
+        key.clone(),
+        "recordChanged",
+        Some(fields("old", "A")),
+        Some(fields("new", "A")),
+        true,
+    );
+    let preview = call(&app, "preview_restore", json!({"eventId":event.id})).unwrap();
+    external
+        .execute_batch(
+            "CREATE TABLE name_child(name TEXT REFERENCES parents(name) ON UPDATE CASCADE)",
+        )
+        .unwrap();
+    assert!(
+        call(
+            &app,
+            "commit_restore",
+            json!({"connectionId":"test","token":preview["token"],"operationId":"new-relationship"})
+        )
+        .is_err()
+    );
+    assert_eq!(
+        external
+            .query_row("SELECT name FROM parents", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "new"
+    );
+    external.execute_batch("DROP TABLE name_child; CREATE TRIGGER name_trigger AFTER UPDATE ON parents BEGIN UPDATE children SET parent_code=parent_code; END;").unwrap();
+    app.state::<AppState>()
+        .session("test")
+        .unwrap()
+        .db
+        .lock()
+        .unwrap()
+        .refresh_metadata();
+    let triggered = captured_event(
+        &app,
+        table,
+        key,
+        "recordChanged",
+        Some(fields("old", "A")),
+        Some(fields("new", "A")),
+        true,
+    );
+    assert_eq!(
+        call(&app, "preview_restore", json!({"eventId":triggered.id}))
+            .unwrap_err()
+            .code,
+        "RESTORE_SIDE_EFFECTS"
+    );
+    external.execute_batch("CREATE TABLE generated_parent(id INTEGER PRIMARY KEY,name TEXT,code TEXT GENERATED ALWAYS AS(name||'!') STORED UNIQUE); CREATE TABLE generated_child(code TEXT REFERENCES generated_parent(code) ON UPDATE CASCADE); INSERT INTO generated_parent(id,name) VALUES(1,'new'); INSERT INTO generated_child VALUES('new!');").unwrap();
+    let generated_fields = |name: &str| {
+        observed(&[
+            ("id", Value::Integer("1".into())),
+            ("name", Value::Text(name.into())),
+            ("code", Value::Text(format!("{name}!"))),
+        ])
+    };
+    let generated = captured_event(
+        &app,
+        TableRef {
+            schema: "".into(),
+            name: "generated_parent".into(),
+            kind: "table".into(),
+        },
+        std::collections::BTreeMap::from([("id".into(), Value::Integer("1".into()))]),
+        "recordChanged",
+        Some(generated_fields("old")),
+        Some(generated_fields("new")),
+        true,
+    );
+    assert_eq!(
+        call(&app, "preview_restore", json!({"eventId":generated.id}))
+            .unwrap_err()
+            .code,
+        "RESTORE_SIDE_EFFECTS"
+    );
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(external);
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}

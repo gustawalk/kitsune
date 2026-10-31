@@ -144,7 +144,6 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
             "The table schema changed since this observation. Restore is unavailable.",
         ));
     }
-    db.restore_protection(&record.table)?;
     let before = event.before_state.as_deref();
     let after = event.after_state.as_deref();
     for fields in [before, after].into_iter().flatten() {
@@ -262,6 +261,14 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
                     "Identity or computed-field changes cannot be restored automatically.",
                 ));
             }
+            // A generated column may depend on an edited field and itself be referenced.
+            // Include all generated columns conservatively when assessing FK effects.
+            let updated_columns: Vec<String> = changed
+                .iter()
+                .map(|f| f.column.clone())
+                .chain(generated.iter().cloned())
+                .collect();
+            db.restore_protection(&record.table, Some(&updated_columns))?;
             let mut assignments = Vec::new();
             for f in &changed {
                 params.push(f.value.clone());
@@ -306,6 +313,7 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
             )
         }
         "recordAppeared" if source.watch_kind == "record" => {
+            db.restore_protection(&record.table, None)?;
             let after = after
                 .ok_or_else(|| error("RESTORE_CAPTURE", "The appeared record was not captured."))?;
             if before.is_some() || !complete(after) {
@@ -328,6 +336,7 @@ fn plan(db: &mut Database, event: &Event, lock: bool) -> Result<Plan, Error> {
             )
         }
         "recordDisappeared" if source.watch_kind == "record" => {
+            db.restore_protection(&record.table, None)?;
             let before = before.ok_or_else(|| {
                 error(
                     "RESTORE_CAPTURE",

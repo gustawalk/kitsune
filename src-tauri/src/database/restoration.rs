@@ -163,7 +163,25 @@ impl Database {
         }
         Ok(())
     }
-    pub fn restore_protection(&mut self, table: &TableRef) -> Result<(), Error> {
+    pub fn restore_protection(
+        &mut self,
+        table: &TableRef,
+        updated_columns: Option<&[String]>,
+    ) -> Result<(), Error> {
+        // A non-key UPDATE cannot invoke an incoming FK action. Existence restores
+        // retain the conservative relationship guard; triggers remain guarded below.
+        let cascade_relevant = if let Some(columns) = updated_columns {
+            let metadata = self.metadata(table)?;
+            self.incoming_foreign_keys(table, &metadata)?
+                .iter()
+                .any(|key| {
+                    key.target_columns
+                        .iter()
+                        .any(|column| columns.contains(column))
+                })
+        } else {
+            true
+        };
         if self.is_mysql() {
             self.require_transactional_table(table)?;
             let p = [
@@ -171,12 +189,13 @@ impl Database {
                 Value::Text(table.name.clone()),
             ];
             let r=self.query("SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE UNIQUE_CONSTRAINT_SCHEMA=?1 AND REFERENCED_TABLE_NAME=?2 AND (DELETE_RULE IN ('CASCADE','SET NULL') OR UPDATE_RULE IN ('CASCADE','SET NULL'))",&p,1,true,5)?;
-            if r.rows
-                .first()
-                .and_then(|r| r.first())
-                .and_then(Value::text)
-                .as_deref()
-                != Some("0")
+            if cascade_relevant
+                && r.rows
+                    .first()
+                    .and_then(|r| r.first())
+                    .and_then(Value::text)
+                    .as_deref()
+                    != Some("0")
             {
                 return Err(Error::new(
                     "RESTORE_CASCADE",
@@ -225,7 +244,7 @@ impl Database {
                 cascades.rows[0][0].text() != Some("0".into()),
             )
         };
-        if trigger || cascade {
+        if trigger || (cascade && cascade_relevant) {
             return Err(Error::new(
                 "RESTORE_SIDE_EFFECTS",
                 "Restore is unavailable: this table has active triggers or cascading relationships whose effects cannot be safely reversed.",
