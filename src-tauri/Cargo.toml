@@ -20,6 +20,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 sha2 = "=0.10.9"
 tauri-plugin-dialog = "=2.7.3"
+tauri-plugin-updater = "=2.10.1"
+tauri-plugin-process = "=2.3.1"
 tauri = { version = "=2.11.6", features = [] }
 rusqlite = { version = "0.32.1", features = ["bundled", "column_decltype", "hooks"] }
 libloading = "0.7.4"
