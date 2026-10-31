@@ -922,7 +922,11 @@ impl Database {
                 )
             }
         );
-        let result = self.query_checked(&sql, &params, 1, false, 30, Some(1)).map_err(|e|if e.code=="MUTATION_CONFLICT"{Error::new("EDIT_CONFLICT","This cell changed or disappeared. Refresh and review the current value before editing again.")}else{e})?;
+        let result = self.query_checked(&sql, &params, 1, false, 30, Some(1)).map_err(|error| {
+            if ["MUTATION_CONFLICT", "WRITE_CONFLICT"].contains(&error.code.as_str()) {
+                Error::new("EDIT_CONFLICT", "An edited cell changed or disappeared. No changes were saved. Refresh and review the current values before trying again.")
+            } else { error }
+        })?;
         if result.affected == 0 {
             return Err(Error::new(
                 "EDIT_CONFLICT",

@@ -36,6 +36,7 @@ import { Button } from "./ui/button";
 interface Props {
   result: ResultSet;
   busy?: boolean;
+  pendingCells?: Set<string>;
   resetScrollKey?: string;
   preferenceKey?: string;
   onVisibleColumns?: (columns: string[]) => void;
@@ -61,6 +62,7 @@ interface Props {
 const emptyRowSelection: number[] = [];
 export function DataGrid({
   result,
+  pendingCells,
   busy = false,
   resetScrollKey,
   preferenceKey,
@@ -738,6 +740,11 @@ export function DataGrid({
                               }
                               data-app-context-menu
                               data-grid-cell={`${r}:${c}`}
+                              data-pending-change={
+                                pendingCells?.has(
+                                  `${r}:${result.columns[col]}`,
+                                ) || undefined
+                              }
                               tabIndex={-1}
                               onContextMenu={() => {
                                 setContextCell([r, col]);

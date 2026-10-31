@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import {
   editedValue,
   recordChanges,
+  stageRowChanges,
+  pendingResult,
   toggleRowSelection,
   valueKindForColumn,
 } from "../src/lib/editing";
@@ -77,5 +79,95 @@ test("record editing collects only changed fields and preserves NULL versus empt
       name: { ...drafts.name, text: "Original" },
       note: { ...drafts.note, isNull: true },
     }),
+  ).toEqual([]);
+});
+
+test("pending edits merge across rows, retain original values and unstage reversions", () => {
+  const ref = (id: string) => ({
+    connectionId: "db",
+    table: { schema: "main", name: "items", kind: "table" },
+    key: { id: { kind: "integer" as const, value: id } },
+  });
+  const text = (value: string) => ({ kind: "text" as const, value });
+  let pending = stageRowChanges([], ref("1"), [
+    { column: "name", before: text("old 1"), value: text("first edit") },
+  ]);
+  pending = stageRowChanges(pending, ref("2"), [
+    { column: "name", before: text("old 2"), value: text("second edit") },
+  ]);
+  pending = stageRowChanges(pending, ref("1"), [
+    { column: "name", before: text("first edit"), value: text("revised edit") },
+  ]);
+  expect(pending).toHaveLength(2);
+  expect(
+    pending.find((row) => row.record.key.id.value === "1")!.changes[0],
+  ).toEqual({
+    column: "name",
+    before: text("old 1"),
+    value: text("revised edit"),
+  });
+  pending = stageRowChanges(pending, ref("1"), [
+    { column: "name", before: text("revised edit"), value: text("old 1") },
+  ]);
+  expect(pending).toHaveLength(1);
+  expect(pending[0].record.key.id.value).toBe("2");
+});
+
+test("staged NULL and empty values differ; previews follow record identity across result pages", () => {
+  const table = { schema: "", name: "items", kind: "table" };
+  const metadata = {
+    table,
+    columns: [
+      {
+        name: "id",
+        pk: 1,
+        nullable: false,
+        dataType: "INTEGER",
+        defaultValue: null,
+      },
+      {
+        name: "name",
+        pk: 0,
+        nullable: true,
+        dataType: "TEXT",
+        defaultValue: null,
+      },
+    ],
+    indexes: [],
+    foreignKeys: [],
+  };
+  const value = (text: string) => ({ kind: "text" as const, value: text });
+  const record = {
+    connectionId: "db",
+    table,
+    key: { id: { kind: "integer" as const, value: "2" } },
+  };
+  const pending = stageRowChanges([], record, [
+    { column: "name", before: { kind: "null" }, value: value("") },
+  ]);
+  const result = {
+    columns: ["id", "name"],
+    types: ["integer", "text"],
+    rows: [
+      [{ kind: "integer" as const, value: "2" }, { kind: "null" as const }],
+      [{ kind: "integer" as const, value: "1" }, value("other")],
+    ],
+    affected: 0,
+    durationMs: 0,
+    truncated: false,
+    nextCursor: null,
+    keysetSupported: false,
+  };
+  const preview = pendingResult(result, metadata, "db", pending);
+  expect(preview.result!.rows[0][1]).toEqual(value(""));
+  expect([...preview.cells]).toEqual(["0:name"]);
+  expect(result.rows[0][1]).toEqual({ kind: "null" });
+  expect(
+    pendingResult(result, metadata, "another-db", pending).cells.size,
+  ).toBe(0);
+  expect(
+    stageRowChanges(pending, record, [
+      { column: "name", before: value(""), value: { kind: "null" } },
+    ]),
   ).toEqual([]);
 });

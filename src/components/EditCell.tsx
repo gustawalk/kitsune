@@ -1,16 +1,16 @@
 import { Checkbox } from "./ui/checkbox";
 import { useState } from "react";
-import { LoaderCircle, Save } from "lucide-react";
+import { Check } from "lucide-react";
 import { Dialog } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Field, ErrorState } from "./shared";
-import { api, errorMessage, invalidate } from "../lib/api";
-import { notify } from "../lib/store";
+import { errorMessage } from "../lib/api";
 import {
   editedValue,
   valueKindForColumn,
   recordChanges,
   type FieldDraft,
+  type CellChange,
 } from "../lib/editing";
 import {
   display,
@@ -32,7 +32,7 @@ export function EditCell({
   connection,
   environment,
   onClose,
-  onSaved,
+  onStage,
 }: {
   record: RecordRef;
   column: string;
@@ -40,7 +40,7 @@ export function EditCell({
   connection: string;
   environment: string;
   onClose: () => void;
-  onSaved: () => void;
+  onStage: (changes: CellChange[]) => void;
 }) {
   const [drafts, setDrafts] = useState<Record<string, FieldDraft>>(() =>
     Object.fromEntries(
@@ -57,15 +57,13 @@ export function EditCell({
       ]),
     ),
   );
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const changed = recordChanges(fields, drafts);
   const patch = (name: string, update: Partial<FieldDraft>) =>
     setDrafts((d) => ({ ...d, [name]: { ...d[name], ...update } }));
-  async function save() {
-    if (busy || !changed.length) return;
+  function save() {
+    if (!changed.length) return;
     setError("");
-    setBusy(true);
     try {
       const changes = changed.map((f) => ({
         column: f.column,
@@ -76,27 +74,17 @@ export function EditCell({
           drafts[f.column].isNull,
         ),
       }));
-      await api("update_cells", { record, changes, confirmed: true });
-      invalidate("browse");
-      invalidate("record");
-      notify(
-        `${changes.length} ${changes.length === 1 ? "value" : "values"} saved`,
-      );
-      onSaved();
+      onStage(changes);
       onClose();
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setBusy(false);
     }
   }
   return (
     <Dialog
       open
       wide
-      onClose={() => {
-        if (!busy) onClose();
-      }}
+      onClose={onClose}
       title="Edit record"
       description={`${connection} · ${environment} · ${qualified(record.table)}`}
     >
@@ -108,13 +96,10 @@ export function EditCell({
       >
         <p className="notice mono">Record: {readableKey(record)}</p>
         <p className="muted small">
-          Edit multiple fields, then apply changes together. If a changed field
-          no longer matches its original value, all changes roll back.
+          Changes stay local. Edit other records, then use Apply changes above
+          the table to save them all together.
         </p>
-        <fieldset
-          disabled={busy}
-          className="connection-fields record-edit-fields"
-        >
+        <fieldset className="connection-fields record-edit-fields">
           {fields.map((f) => {
             const d = drafts[f.column];
             return (
@@ -148,21 +133,12 @@ export function EditCell({
         </fieldset>
         {error && <ErrorState error={error} />}
         <footer>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={busy}
-            onClick={onClose}
-          >
+          <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={busy || !changed.length}>
-            {busy ? (
-              <LoaderCircle size={14} className="spin" />
-            ) : (
-              <Save size={14} />
-            )}
-            Apply changes{changed.length ? ` (${changed.length})` : ""}
+          <Button disabled={!changed.length}>
+            <Check size={14} />
+            Stage changes{changed.length ? ` (${changed.length})` : ""}
           </Button>
         </footer>
       </form>

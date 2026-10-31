@@ -1370,6 +1370,84 @@ pub(crate) fn dispatch<R: tauri::Runtime>(
                 approval.expected_affected,
             )?)
         }
+        "update_records" => {
+            #[derive(serde::Deserialize)]
+            struct Change {
+                column: String,
+                before: Value,
+                value: Value,
+            }
+            #[derive(serde::Deserialize)]
+            struct Row {
+                key: BTreeMap<String, Value>,
+                changes: Vec<Change>,
+            }
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Request {
+                connection_id: String,
+                table: TableRef,
+                rows: Vec<Row>,
+                confirmed: bool,
+            }
+            let request: Request = decode(p)?;
+            if !request.confirmed {
+                return Err(Error::new(
+                    "CONFIRMATION_REQUIRED",
+                    "Review the pending changes before applying.",
+                ));
+            }
+            let count: usize = request.rows.iter().map(|row| row.changes.len()).sum();
+            if request.rows.is_empty()
+                || request.rows.len() > 500
+                || count > 500
+                || request.rows.iter().any(|row| row.changes.is_empty())
+            {
+                return Err(Error::new(
+                    "VALIDATION",
+                    "Apply between 1 and 500 distinct cell changes.",
+                ));
+            }
+            let mut identities = std::collections::BTreeSet::new();
+            for row in &request.rows {
+                let key = serde_json::to_string(&row.key)
+                    .map_err(|_| Error::new("VALIDATION", "Invalid record identity."))?;
+                if !identities.insert(key) {
+                    return Err(Error::new(
+                        "VALIDATION",
+                        "Each record can appear only once in a batch.",
+                    ));
+                }
+            }
+            let session = state.session(&request.connection_id)?;
+            let _access = session.access.read().map_err(|_| locked())?;
+            let mut db = session.db.lock().map_err(|_| locked())?;
+            if session.read_only.load(Ordering::SeqCst) || !session.connected.load(Ordering::SeqCst)
+            {
+                return Err(Error::new(
+                    "READ_ONLY",
+                    "This connection is read-only or disconnected. Enable write access before applying changes.",
+                ));
+            }
+            db.require_transactional_table(&request.table)?;
+            db.write_transaction(|db| {
+                for row in &request.rows {
+                    let record = RecordRef {
+                        connection_id: request.connection_id.clone(),
+                        table: request.table.clone(),
+                        key: row.key.clone(),
+                    };
+                    let changes: Vec<_> = row
+                        .changes
+                        .iter()
+                        .map(|change| (change.column.as_str(), &change.before, &change.value))
+                        .collect();
+                    db.update_cells(&record, &changes)?;
+                }
+                Ok(())
+            })?;
+            Ok(json!({"affected":request.rows.len(),"changedCells":count}))
+        }
         "update_cells" => {
             #[derive(serde::Deserialize)]
             struct Change {

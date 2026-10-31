@@ -1471,6 +1471,14 @@ async fn postgres_restore_and_diagnostics_fixture() {
         )
         .unwrap();
     }
+    assert_multi_record_network_batch(
+        &app,
+        TableRef {
+            schema: "public".into(),
+            name: "orders".into(),
+            kind: "table".into(),
+        },
+    );
     let key = std::collections::BTreeMap::from([("id".into(), Value::Integer("1".into()))]);
     let before = observed(&[
         ("id", Value::Integer("1".into())),
@@ -1673,6 +1681,55 @@ fn mysql_editor(
     response
 }
 
+// Call only after a disposable network fixture's marker has been verified.
+fn assert_multi_record_network_batch(app: &tauri::App<tauri::test::MockRuntime>, table: TableRef) {
+    let session = app.state::<AppState>().session("test").unwrap();
+    let sql = format!(
+        "SELECT id,status FROM {} WHERE id IN (5821,5822) ORDER BY id",
+        crate::database::qualified(&table)
+    );
+    let read = || {
+        session
+            .db
+            .lock()
+            .unwrap()
+            .query(&sql, &[], 2, true, 10)
+            .unwrap()
+            .rows
+    };
+    let original = read();
+    assert_eq!(original.len(), 2);
+    let rows: Vec<Json> = original.iter().enumerate().map(|(index,row)| json!({"key":{"id":row[0]},"changes":[{"column":"status","before":row[1],"value":{"kind":"text","value":format!("batch row {index}")}}]})).collect();
+    let payload = json!({"connectionId":"test","table":table,"rows":rows,"confirmed":true});
+    assert_eq!(
+        call(app, "update_records", payload.clone()).unwrap(),
+        json!({"affected":2,"changedCells":2})
+    );
+    let changed = read();
+    assert_eq!(changed[0][1], Value::Text("batch row 0".into()));
+    assert_eq!(changed[1][1], Value::Text("batch row 1".into()));
+    let restore_rows: Vec<Json> = original.iter().zip(&changed).map(|(before,after)| json!({"key":{"id":before[0]},"changes":[{"column":"status","before":after[1],"value":before[1]}]})).collect();
+    call(
+        app,
+        "update_records",
+        json!({"connectionId":"test","table":table,"rows":restore_rows,"confirmed":true}),
+    )
+    .unwrap();
+    assert_eq!(read(), original);
+    let mut conflict = payload;
+    conflict["rows"][1]["changes"][0]["before"] =
+        json!({"kind":"text","value":"incorrect batch baseline"});
+    assert_eq!(
+        call(app, "update_records", conflict).unwrap_err().code,
+        "EDIT_CONFLICT"
+    );
+    assert_eq!(
+        read(),
+        original,
+        "A later-row conflict must roll back the first row on every driver"
+    );
+}
+
 // Fixed loopback endpoints belong only to compose.engines.yaml. Never use a user connection here.
 async fn network_mysql_workflow(port: u16) {
     let (app, path, internal) = app();
@@ -1773,6 +1830,7 @@ async fn network_mysql_workflow(port: u16) {
         "fixture accepted an unencrypted connection"
     );
     let connected = call(&app, "connect", payload.clone()).unwrap();
+    assert_multi_record_network_batch(&app, order_table.clone());
     assert_eq!(connected["capabilities"]["supportsTransactionalDdl"], false);
     assert_eq!(connected["capabilities"]["supportsHistoricalRestore"], true);
     let target = json!({"connectionId":"test","table":{"schema":"kitsune_test","name":"orders","kind":"table"},"key":{"id":{"kind":"integer","value":"5821"}}});
@@ -2277,6 +2335,7 @@ async fn sqlserver_network_workflow_fixture() {
             .count(),
         2
     );
+    assert_multi_record_network_batch(&app, order_table.clone());
     call(&app,"update_cell",json!({"record":target,"column":"status","before":{"kind":"text","value":"pending"},"value":{"kind":"text","value":"edited"},"confirmed":true})).unwrap();
     assert!(call(&app,"update_cell",json!({"record":target,"column":"status","before":{"kind":"text","value":"pending"},"value":{"kind":"text","value":"stale"},"confirmed":true})).is_err());
     let diag=call(&app,"diagnose_query",json!({"connectionId":"test","sql":"SELECT * FROM dbo.orders WHERE id=?1","params":[{"kind":"integer","value":"5821"}],"mode":"estimate","operationId":"mssql-plan"})).unwrap();
@@ -3246,6 +3305,110 @@ async fn restore_unrelated_field_allows_cascades_but_guards_referenced_columns_a
             .code,
         "RESTORE_SIDE_EFFECTS"
     );
+    call(&app, "disconnect", json!({"id":"test"})).unwrap();
+    drop(external);
+    drop(app);
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(internal);
+}
+
+#[tokio::test]
+async fn multi_record_edits_commit_once_and_roll_back_every_row_on_failure() {
+    let (app, path, internal) = app();
+    let external = rusqlite::Connection::open(&path).unwrap();
+    external.execute_batch("CREATE TABLE batch_items(id INTEGER PRIMARY KEY,name TEXT NOT NULL,note TEXT CHECK(note IS NULL OR note <> 'invalid')); CREATE TABLE edit_audit(id INTEGER); CREATE TRIGGER record_edits AFTER UPDATE ON batch_items BEGIN INSERT INTO edit_audit VALUES(new.id); END;").unwrap();
+    for id in 1..=5 {
+        external
+            .execute(
+                "INSERT INTO batch_items VALUES(?1,?2,NULL)",
+                rusqlite::params![id, format!("original {id}")],
+            )
+            .unwrap();
+    }
+    connect(&app, &path, false);
+    let rows: Vec<Json>=(1..=5).map(|id|json!({"key":{"id":{"kind":"integer","value":id.to_string()}},"changes":[{"column":"name","before":{"kind":"text","value":format!("original {id}")},"value":{"kind":"text","value":format!("changed {id}")}}]})).collect();
+    let payload = json!({"connectionId":"test","table":{"schema":"","name":"batch_items","kind":"table"},"confirmed":true,"rows":rows});
+    let names = || {
+        let mut stmt = external
+            .prepare("SELECT name FROM batch_items ORDER BY id")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    };
+    let audit = || {
+        external
+            .query_row("SELECT count(*) FROM edit_audit", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap()
+    };
+    let result = call(&app, "update_records", payload.clone()).unwrap();
+    assert_eq!(result, json!({"affected":5,"changedCells":5}));
+    assert_eq!(
+        names(),
+        (1..=5)
+            .map(|id| format!("changed {id}"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(audit(), 5);
+    external
+        .execute_batch("UPDATE batch_items SET name='original '||id; DELETE FROM edit_audit;")
+        .unwrap();
+    let original = names();
+    let mut conflict = payload.clone();
+    conflict["rows"][4]["changes"][0]["before"]["value"] = json!("stale value");
+    assert_eq!(
+        call(&app, "update_records", conflict).unwrap_err().code,
+        "EDIT_CONFLICT"
+    );
+    assert_eq!(names(), original);
+    assert_eq!(audit(), 0);
+    let mut invalid = payload.clone();
+    invalid["rows"][4]["changes"].as_array_mut().unwrap().push(
+        json!({"column":"note","before":{"kind":"null"},"value":{"kind":"text","value":"invalid"}}),
+    );
+    assert_eq!(
+        call(&app, "update_records", invalid).unwrap_err().code,
+        "SQLITE_CONSTRAINT"
+    );
+    assert_eq!(names(), original);
+    assert_eq!(audit(), 0);
+    let mut invalid_field = payload.clone();
+    invalid_field["rows"][4]["changes"][0]["column"] = json!("missing");
+    assert_eq!(
+        call(&app, "update_records", invalid_field)
+            .unwrap_err()
+            .code,
+        "VALIDATION"
+    );
+    assert_eq!(names(), original);
+    assert_eq!(audit(), 0);
+    let mut duplicate = payload.clone();
+    duplicate["rows"][1] = duplicate["rows"][0].clone();
+    assert_eq!(
+        call(&app, "update_records", duplicate).unwrap_err().code,
+        "VALIDATION"
+    );
+    let mut unconfirmed = payload.clone();
+    unconfirmed["confirmed"] = json!(false);
+    assert_eq!(
+        call(&app, "update_records", unconfirmed).unwrap_err().code,
+        "CONFIRMATION_REQUIRED"
+    );
+    call(
+        &app,
+        "set_write_access",
+        json!({"id":"test","enabled":false}),
+    )
+    .unwrap();
+    assert_eq!(
+        call(&app, "update_records", payload).unwrap_err().code,
+        "READ_ONLY"
+    );
+    assert_eq!(names(), original);
+    assert_eq!(audit(), 0);
     call(&app, "disconnect", json!({"id":"test"})).unwrap();
     drop(external);
     drop(app);

@@ -343,6 +343,10 @@ const schemas: Record<string, z.ZodType> = {
     expectedRows: z.number().int().min(1).max(500),
   }),
   commit_table_mutation: result,
+  update_records: z.object({
+    affected: z.number().int().min(1).max(500),
+    changedCells: z.number().int().min(1).max(500),
+  }),
   update_cells: z.object({ affected: z.number().int().min(1).max(500) }),
   update_cell: z.object({ affected: z.literal(1) }),
   choose_sqlite_file: z.string().nullable(),

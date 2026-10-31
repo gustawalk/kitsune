@@ -13,6 +13,10 @@ export const updater = createUpdater({
   relaunch,
   installationBlocker: () => {
     const workspace = getWorkspace();
+    if (
+      Object.values(workspace.pendingEdits).some((pending) => pending.count > 0)
+    )
+      return "Apply or discard pending table edits before installing the update.";
     if (Object.values(workspace.transactions).includes("active"))
       return "Commit or roll back active SQL transactions before installing the update.";
     if (

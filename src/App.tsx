@@ -331,10 +331,20 @@ function App() {
       const id = closingQueue.current.shift();
       const tab = state.tabs.find((t) => t.id === id);
       if (!tab) continue;
+      if (state.pendingEdits[tab.id]?.applying) {
+        closingQueue.current = [];
+        setClosing(undefined);
+        notify(
+          "Wait for pending changes to finish applying before closing this tab.",
+          true,
+        );
+        return;
+      }
       if (
-        tab.kind === "query" &&
-        ((tab.sql && tab.sql !== tab.savedSql) ||
-          state.transactions[tab.id] === "active")
+        state.pendingEdits[tab.id]?.count ||
+        (tab.kind === "query" &&
+          ((tab.sql && tab.sql !== tab.savedSql) ||
+            state.transactions[tab.id] === "active"))
       ) {
         setClosing(tab);
         return;
@@ -645,11 +655,12 @@ function App() {
                             </strong>
                             <small>{context}</small>
                           </span>
-                          {tab.kind === "query" &&
+                          {((tab.kind === "query" &&
                             tab.sql &&
-                            tab.sql !== tab.savedSql && (
-                              <span className="unsaved-dot" />
-                            )}
+                            tab.sql !== tab.savedSql) ||
+                            workspace.pendingEdits[tab.id]?.count > 0) && (
+                            <span className="unsaved-dot" />
+                          )}
                         </button>
                         <button
                           className="tab-close"
@@ -872,9 +883,11 @@ function App() {
           title={
             workspace.transactions[closing.id] === "active"
               ? "Close an active transaction?"
-              : "Close unsaved query?"
+              : closing.kind !== "query"
+                ? "Discard pending table changes?"
+                : "Close unsaved query?"
           }
-          description={`${closing.title}: closing ends this SQL session and discards uncommitted work. Save query text first with Ctrl/Cmd+S if needed.${closingQueue.current.length ? ` ${closingQueue.current.length} more tab(s) remain to be checked. Keep editing cancels the remaining close operation.` : ""}`}
+          description={`${closing.title}: ${closing.kind !== "query" ? "closing discards its pending table edits. Keep editing to apply them first." : "closing ends this SQL session and discards uncommitted work. Save query text first with Ctrl/Cmd+S if needed."}${closingQueue.current.length ? ` ${closingQueue.current.length} more tab(s) remain to be checked. Keep editing cancels the remaining close operation.` : ""}`}
         >
           <footer>
             <Button
@@ -890,7 +903,7 @@ function App() {
               onClick={() => {
                 setClosingBusy(true);
                 void (
-                  closing.connectionId
+                  closing.kind === "query" && closing.connectionId
                     ? api("close_editor_session", {
                         connectionId: closing.connectionId,
                         tabId: closing.id,
@@ -906,7 +919,7 @@ function App() {
                   .finally(() => setClosingBusy(false));
               }}
             >
-              Close query
+              {closing.kind !== "query" ? "Discard and close" : "Close query"}
             </Button>
           </footer>
         </Dialog>

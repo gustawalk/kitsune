@@ -40,6 +40,7 @@ export function TableMutation({
   indices,
   onClose,
   onSaved,
+  onStage,
 }: {
   kind: TableMutationKind;
   connectionId: string;
@@ -51,6 +52,7 @@ export function TableMutation({
   indices: number[];
   onClose: () => void;
   onSaved: () => void;
+  onStage?: (column: string, value: DbValue) => void;
 }) {
   const [draft, setDraft] = useState<Record<string, DraftField>>({});
   const keys = identityColumns(metadata);
@@ -80,6 +82,15 @@ export function TableMutation({
     setError("");
     setBusy(true);
     try {
+      if (kind === "update" && onStage) {
+        if (!field) throw new Error("Choose an editable field.");
+        onStage(
+          column,
+          editedValue(valueKindForColumn(field.dataType), text, nullValue),
+        );
+        onClose();
+        return;
+      }
       const values: Record<string, DbValue> = {};
       if (kind === "insert")
         for (const c of metadata.columns) {
@@ -264,8 +275,8 @@ export function TableMutation({
               <>
                 <p className="notice">
                   Set one field to the same value across {indices.length}{" "}
-                  selected rows. Only rows on the loaded page are selected. A
-                  changed cell causes the whole update to roll back.
+                  selected rows. These edits stay local until you use Apply
+                  changes above the table.
                 </p>
                 <Field label="Field to change">
                   <Select
@@ -350,7 +361,9 @@ export function TableMutation({
                 ? kind === "delete"
                   ? "Confirm deletion"
                   : "Confirm changes"
-                : "Review changes"}
+                : kind === "update" && onStage
+                  ? "Stage changes"
+                  : "Review changes"}
           </Button>
         </footer>
       </form>

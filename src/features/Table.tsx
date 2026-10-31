@@ -1,3 +1,8 @@
+import {
+  pendingResult,
+  stageRowChanges,
+  type PendingRow,
+} from "../lib/editing";
 import { WorkflowHelp } from "../components/shared";
 import {
   ReferenceValuePicker,
@@ -10,9 +15,11 @@ import {
   type TableMutationKind,
 } from "../components/TableMutation";
 import { Select, SelectItem } from "../components/ui/select";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Eye,
+  Save,
+  LoaderCircle,
   Download,
   Plus,
   Pencil,
@@ -39,10 +46,13 @@ import {
   Loading,
   Tag,
 } from "../components/shared";
-import { api, errorMessage, useRemote } from "../lib/api";
+import { api, errorMessage, invalidate, useRemote } from "../lib/api";
 import { openTab, patchTab, update, useWorkspace } from "../lib/store";
 import {
   rowKey,
+  identity,
+  readableKey,
+  display,
   identityColumns,
   type DbValue,
   type Filter,
@@ -55,6 +65,32 @@ import {
 } from "../lib/types";
 export function TableWorkspace({ tab }: { tab: Tab }) {
   const workspace = useWorkspace();
+  const [pending, setPending] = useState<PendingRow[]>([]);
+  const [applying, setApplying] = useState(false);
+  const applyLock = useRef(false);
+  const [applyError, setApplyError] = useState("");
+  const changeCount = pending.reduce(
+    (total, row) => total + row.changes.length,
+    0,
+  );
+  useEffect(() => {
+    update((state) => ({
+      pendingEdits: {
+        ...state.pendingEdits,
+        [tab.id]: { count: changeCount, applying },
+      },
+    }));
+  }, [changeCount, applying, tab.id]);
+  useEffect(
+    () => () => {
+      update((state) => {
+        const next = { ...state.pendingEdits };
+        delete next[tab.id];
+        return { pendingEdits: next };
+      });
+    },
+    [tab.id],
+  );
   const [exporting, setExporting] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
   const [editing, setEditing] = useState<{
@@ -151,11 +187,51 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
     ...remoteRows,
     loading: remoteRows.loading || remoteRows.stale,
   };
+  const preview = useMemo(
+    () =>
+      pendingResult(rows.data, metadata.data, tab.connectionId || "", pending),
+    [rows.data, metadata.data, tab.connectionId, pending],
+  );
+  async function applyChanges() {
+    if (applyLock.current || !pending.length || !writable) return;
+    applyLock.current = true;
+    setApplying(true);
+    update((state) => ({
+      pendingEdits: {
+        ...state.pendingEdits,
+        [tab.id]: { count: changeCount, applying: true },
+      },
+    }));
+    setApplyError("");
+    try {
+      await api("update_records", {
+        connectionId: tab.connectionId,
+        table: tab.table,
+        confirmed: true,
+        rows: pending.map((row) => ({
+          key: row.record.key,
+          changes: row.changes,
+        })),
+      });
+      setPending([]);
+      invalidate("record");
+      invalidate("browse");
+      setSelected(undefined);
+      setSelection(undefined);
+      notify(`${pending.length} rows updated`);
+      void rows.refresh();
+    } catch (failure) {
+      setApplyError(errorMessage(failure));
+    } finally {
+      setApplying(false);
+      applyLock.current = false;
+    }
+  }
   const [referenceColumn, setReferenceColumn] = useState<string>();
   const referenceDisplay = useReferenceDisplay(
     `reference-display:${JSON.stringify([tab.connectionId, tab.table?.schema, tab.table?.name])}`,
     tab.connectionId || "",
-    rows.loading ? undefined : rows.data,
+    rows.loading ? undefined : preview.result,
     metadata.data,
     connected && workspace.activeTab === tab.id && tab.kind === "table",
   );
@@ -167,7 +243,14 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
     !!metadata.data &&
     identityColumns(metadata.data).length > 0;
   function mutate(kind: TableMutationKind, indices = selectedIndices) {
-    if (!rows.data || !metadata.data || rows.loading) return;
+    if (!rows.data || !metadata.data || rows.loading || applying) return;
+    if (pending.length && kind !== "update") {
+      notify(
+        "Apply or discard pending changes before inserting or deleting rows.",
+        true,
+      );
+      return;
+    }
     setMutation({
       kind,
       result: rows.data,
@@ -432,6 +515,31 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           environment={connection?.environment || "development"}
           table={tab.table}
           onClose={() => setMutation(undefined)}
+          onStage={
+            mutation.kind === "update"
+              ? (column, value) => {
+                  let next = pending;
+                  for (const index of mutation.indices) {
+                    const row = mutation.result.rows[index];
+                    const record = {
+                      connectionId: tab.connectionId!,
+                      table: tab.table!,
+                      key: rowKey(
+                        mutation.metadata,
+                        mutation.result.columns,
+                        row,
+                      ),
+                    };
+                    const before = row[mutation.result.columns.indexOf(column)];
+                    next = stageRowChanges(next, record, [
+                      { column, before, value },
+                    ]);
+                  }
+                  setPending(next);
+                  setApplyError("");
+                }
+              : undefined
+          }
           onSaved={() => {
             setSelection(undefined);
             setSelected(undefined);
@@ -445,9 +553,9 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           connection={connection?.name || "Database"}
           environment={connection?.environment || "development"}
           onClose={() => setEditing(undefined)}
-          onSaved={() => {
-            setSelected(undefined);
-            void rows.refresh();
+          onStage={(changes) => {
+            setPending(stageRowChanges(pending, editing.record, changes));
+            setApplyError("");
           }}
         />
       )}
@@ -483,9 +591,9 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
         </p>
         <p>
           To edit data, enable write access for the connection. Double-click a
-          cell or press F2 to edit its record, then use Apply changes to save
-          multiple fields together. Use the row checkboxes for bulk actions.
-          Changes require review.
+          cell or press F2 to stage an edit. Edit as many records as needed,
+          then use Apply changes above the table to save the entire batch. Use
+          the row checkboxes for bulk actions. Changes require review.
         </p>
         <p>
           Investigate follows related records. Watch records changes while the
@@ -620,8 +728,81 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
               ? "This table has no reliable unique key; use an explicit SQL query to edit."
               : tab.table.kind !== "table"
                 ? "Views can be inspected here; use an explicit SQL query for changes."
-                : "Double-click a value or press F2 to edit the record · Apply changes saves all edited fields · Enter inspects its full value"}
+                : "Double-click or F2 to stage edits · Apply changes saves all pending rows together · Enter inspects its full value"}
         </p>
+      )}
+      {!!pending.length && (
+        <div className="pending-edits-bar" aria-label="Pending table changes">
+          <div className="pending-edits-actions">
+            <div>
+              <strong>
+                {changeCount} pending {changeCount === 1 ? "change" : "changes"}{" "}
+                across {pending.length} {pending.length === 1 ? "row" : "rows"}
+              </strong>
+              <span>Not saved · all rows apply together.</span>
+            </div>
+            <div className="spacer" />
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={applying}
+              onClick={() => {
+                setPending([]);
+                setApplyError("");
+              }}
+            >
+              Discard changes
+            </Button>
+            <Button
+              size="sm"
+              disabled={applying || !writable}
+              onClick={() => void applyChanges()}
+            >
+              {applying ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : (
+                <Save size={14} />
+              )}
+              {applying ? "Applying…" : "Apply changes"}
+            </Button>
+          </div>
+          <details>
+            <summary>Review pending changes</summary>
+            <div className="pending-edits-review">
+              {pending.map((row) => (
+                <div key={identity(row.record)}>
+                  <div>
+                    <strong>{readableKey(row.record)}</strong>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={applying}
+                      onClick={() =>
+                        setPending(
+                          pending.filter(
+                            (item) =>
+                              identity(item.record) !== identity(row.record),
+                          ),
+                        )
+                      }
+                    >
+                      Discard row
+                    </Button>
+                  </div>
+                  {row.changes.map((change) => (
+                    <p key={change.column}>
+                      <strong>{change.column}</strong>
+                      <del>{display(change.before).slice(0, 180)}</del>
+                      <span>→</span>
+                      <ins>{display(change.value).slice(0, 180)}</ins>
+                    </p>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </details>
+          {applyError && <ErrorState error={applyError} />}
+        </div>
       )}
       {filtering && metadata.data && (
         <FilterBuilder
@@ -783,8 +964,9 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
           ) : (
             rows.data && (
               <DataGrid
-                result={rows.data}
-                busy={rows.loading}
+                result={preview.result!}
+                pendingCells={preview.cells}
+                busy={rows.loading || applying}
                 resetScrollKey={`${sort}:${descending}`}
                 foreignKeys={metadata.data?.foreignKeys}
                 referenceLabels={referenceDisplay.labels}
@@ -916,6 +1098,7 @@ export function TableWorkspace({ tab }: { tab: Tab }) {
                 }
                 onEdit={
                   writable &&
+                  !applying &&
                   tab.table?.kind === "table" &&
                   metadata.data &&
                   identityColumns(metadata.data).length
