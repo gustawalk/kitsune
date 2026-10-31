@@ -1,6 +1,6 @@
 [package]
 name = "kitsune"
-version = "0.1.0"
+version = "0.1.1"
 description = "Understand your data. A local database investigation environment."
 authors = ["walk"]
 edition = "2024"
