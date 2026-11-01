@@ -72,6 +72,13 @@ export function ConnectionDialog({
     config.rememberPassword &&
     (initial.credentialStore || "operatingSystem") ===
       (config.credentialStore || "operatingSystem");
+
+  const [portInput, setPortInput] = useState(String(config.port ?? ''));
+
+  useEffect(() => {
+    setPortInput(String(config.port ?? ''));
+  }, [config.port]);
+
   useEffect(() => {
     let current = true;
     if (
@@ -259,7 +266,7 @@ export function ConnectionDialog({
               Use database URL
             </Button>
           </form>
-          <p className="database-chooser-label">Choose your database</p>
+          <p className="database-chooser-label pt-4">Choose your database</p>
           <div className="database-driver-grid">
             {(
               [
@@ -412,15 +419,22 @@ export function ConnectionDialog({
                   </Field>
                   <Field label="Port">
                     <input
-                      type="number"
                       required
                       min={1}
                       max={65535}
-                      value={config.port}
-                      onChange={(e) => patch({ port: Number(e.target.value) })}
+                      value={portInput}
+                      onChange={(e) => setPortInput(e.target.value)}
+                      onBlur={(e) => {
+                          const num = Number(e.target.value);
+                          if (!isNaN(num) && e.target.value.trim() !== '') {
+                            patch({ port: num });
+                          } else {
+                            setPortInput(String(config.port));
+                          }
+                      }}
                     />
                   </Field>
-                  <Field label="Database">
+                 <Field label="Database">
                     <input
                       required
                       value={config.database}
