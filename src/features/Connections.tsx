@@ -73,10 +73,10 @@ export function ConnectionDialog({
     (initial.credentialStore || "operatingSystem") ===
       (config.credentialStore || "operatingSystem");
 
-  const [portInput, setPortInput] = useState(String(config.port ?? ''));
+  const [portInput, setPortInput] = useState(String(config.port ?? ""));
 
   useEffect(() => {
-    setPortInput(String(config.port ?? ''));
+    setPortInput(String(config.port ?? ""));
   }, [config.port]);
 
   useEffect(() => {
@@ -425,16 +425,16 @@ export function ConnectionDialog({
                       value={portInput}
                       onChange={(e) => setPortInput(e.target.value)}
                       onBlur={(e) => {
-                          const num = Number(e.target.value);
-                          if (!isNaN(num) && e.target.value.trim() !== '') {
-                            patch({ port: num });
-                          } else {
-                            setPortInput(String(config.port));
-                          }
+                        const num = Number(e.target.value);
+                        if (!isNaN(num) && e.target.value.trim() !== "") {
+                          patch({ port: num });
+                        } else {
+                          setPortInput(String(config.port));
+                        }
                       }}
                     />
                   </Field>
-                 <Field label="Database">
+                  <Field label="Database">
                     <input
                       required
                       value={config.database}
